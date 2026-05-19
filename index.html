@@ -1,0 +1,3626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CNC Image Engraver — G-code Generator</title>
+<style>
+  /* ===== Theme tokens ===== */
+  :root {
+    /* Dark theme (default) */
+    --bg:               #1e1e1e;
+    --bg-1:             #2a2a2a;  /* header, tabs, gcode header */
+    --bg-2:             #252525;  /* sidebar */
+    --bg-3:             #1a1a1a;  /* inputs, gcode area, progress */
+    --bg-canvas:        #181818;  /* preview pane backdrop */
+    --bg-textarea:      #111;
+    --bg-overlay:       rgba(0,0,0,0.4);
+    --fg:               #ddd;
+    --fg-2:             #ccc;
+    --fg-3:             #999;
+    --fg-faint:         #888;
+    --fg-hint:          #777;
+    --border:           #444;
+    --border-soft:      #3a3a3a;
+    --border-strong:    #555;
+    --accent:           #6cb6ff;
+    --accent-2:         #0d6efd;
+    --button-bg:        #0d6efd;
+    --button-fg:        #fff;
+    --button-bg-hover:  #1a7aff;
+    --button-2-bg:      #444;
+    --button-2-fg:      #fff;
+    --button-2-bg-hover:#555;
+    --button-dis-bg:    #333;
+    --button-dis-fg:    #666;
+    --textarea-fg:      #b5e8a8;
+    --warn:             #e0b060;
+    --shadow-strong:    0 4px 20px rgba(0,0,0,0.5);
+    --shadow-tip:       0 4px 14px rgba(0,0,0,0.7);
+    --estimate-fg:      #6cb6ff;
+  }
+  body.theme-light {
+    --bg:               #f4f5f7;
+    --bg-1:             #ffffff;
+    --bg-2:             #ebedf0;
+    --bg-3:             #ffffff;
+    --bg-canvas:        #e2e5ea;
+    --bg-textarea:      #f8f9fa;
+    --bg-overlay:       rgba(255,255,255,0.7);
+    --fg:               #1a1d21;
+    --fg-2:             #2a2e34;
+    --fg-3:             #555;
+    --fg-faint:         #6a7079;
+    --fg-hint:          #7d828a;
+    --border:           #cfd3d8;
+    --border-soft:      #e0e3e8;
+    --border-strong:    #aab0b8;
+    --accent:           #0d6efd;
+    --accent-2:         #0050d6;
+    --button-bg:        #0d6efd;
+    --button-fg:        #fff;
+    --button-bg-hover:  #0058d9;
+    --button-2-bg:      #dfe2e7;
+    --button-2-fg:      #1a1d21;
+    --button-2-bg-hover:#cdd1d7;
+    --button-dis-bg:    #e6e8ec;
+    --button-dis-fg:    #a0a4ab;
+    --textarea-fg:      #1d3a1d;
+    --warn:             #b07820;
+    --shadow-strong:    0 4px 18px rgba(0,0,0,0.15);
+    --shadow-tip:       0 4px 12px rgba(0,0,0,0.18);
+    --estimate-fg:      #0d6efd;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  header {
+    padding: 12px 20px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 500; }
+  .theme-toggle {
+    width: auto;
+    background: transparent;
+    color: var(--fg-2);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: normal;
+    border-radius: 16px;
+    cursor: pointer;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    line-height: 1;
+  }
+  .theme-toggle:hover:not(:disabled) {
+    background: var(--bg-2);
+    color: var(--fg);
+    border-color: var(--border-strong);
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: var(--sidebar-w, 340px) 6px 1fr;
+    gap: 0;
+    height: calc(100vh - 49px);
+  }
+  .sidebar {
+    background: var(--bg-2);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 16px;
+    min-width: 0;
+  }
+  .resize-handle {
+    background: var(--bg-1);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    cursor: col-resize;
+    position: relative;
+    transition: background 0.1s;
+  }
+  .resize-handle:hover,
+  .resize-handle.dragging { background: var(--accent); }
+  .resize-handle::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 32px;
+    background: var(--border-strong);
+    border-radius: 1px;
+  }
+  .resize-handle:hover::before,
+  .resize-handle.dragging::before { background: #fff; }
+  .main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .tabs {
+    display: flex;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+    align-items: center;
+    gap: 4px;
+  }
+  .tab {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--fg-3);
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab-spacer { flex: 1; }
+  .tab-tools {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--fg-2);
+    padding-right: 12px;
+  }
+  .tab-tools label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+  .tab-tools input { accent-color: var(--accent); }
+  .preview-stack {
+    flex: 1;
+    position: relative;
+    background: var(--bg-canvas);
+    overflow: hidden;
+  }
+  .pane {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  .pane.active { display: flex; }
+  .pane2d { padding: 20px; overflow: auto; }
+  #canvas2d {
+    background: #fff;
+    image-rendering: pixelated;
+    box-shadow: var(--shadow-strong);
+    max-width: 100%;
+    max-height: 100%;
+  }
+  .pane3d { padding: 0; }
+  #canvas3d { display: block; width: 100%; height: 100%; }
+  .pane3d-hint {
+    position: absolute;
+    bottom: 10px;
+    left: 12px;
+    font-size: 11px;
+    color: var(--fg-hint);
+    background: var(--bg-overlay);
+    padding: 4px 8px;
+    border-radius: 3px;
+    pointer-events: none;
+  }
+  .gcode-area {
+    height: 200px;
+    background: var(--bg-3);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .gcode-area .header {
+    padding: 6px 12px;
+    background: var(--bg-1);
+    font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .gcode-area textarea {
+    flex: 1;
+    background: var(--bg-textarea);
+    color: var(--textarea-fg);
+    border: none;
+    padding: 8px 12px;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    resize: none;
+    outline: none;
+  }
+  .field textarea {
+    background: var(--bg-3);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    resize: vertical;
+    min-height: 38px;
+    outline: none;
+  }
+  .field textarea:focus { border-color: var(--accent); }
+  .group {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .group:last-child { border-bottom: none; }
+  .group-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--fg-faint);
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 10px;
+  }
+  .field label {
+    font-size: 12px;
+    margin-bottom: 4px;
+    color: var(--fg-2);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    word-break: break-word;
+  }
+  .field input[type="number"],
+  .field input[type="text"],
+  .field select { min-width: 0; }
+  .field label .val {
+    color: var(--accent);
+    font-family: monospace;
+  }
+  .field input[type="number"],
+  .field input[type="text"],
+  .field select {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 6px 8px;
+    border-radius: 3px;
+    font-size: 13px;
+    outline: none;
+  }
+  .field input[type="number"]:focus,
+  .field select:focus { border-color: var(--accent); }
+  .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .field input[type="file"] { color: var(--fg-2); font-size: 12px; }
+  .checkbox-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    margin-bottom: 8px;
+    color: var(--fg-2);
+  }
+  .checkbox-field input { accent-color: var(--accent); }
+  button {
+    width: 100%;
+    background: var(--button-bg);
+    color: var(--button-fg);
+    border: none;
+    padding: 10px;
+    border-radius: 3px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    margin-bottom: 8px;
+  }
+  button:hover:not(:disabled) { background: var(--button-bg-hover); }
+  button.secondary { background: var(--button-2-bg); color: var(--button-2-fg); }
+  button.secondary:hover:not(:disabled) { background: var(--button-2-bg-hover); }
+  button:disabled { background: var(--button-dis-bg); color: var(--button-dis-fg); cursor: not-allowed; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 0; }
+  .info {
+    font-size: 11px;
+    color: var(--fg-faint);
+    margin-top: 4px;
+    word-break: break-word;
+  }
+  .warn { color: var(--warn); }
+
+  /* Output-mode visibility */
+  body.mode-cnc   .laser-only { display: none !important; }
+  body.mode-laser .cnc-only   { display: none !important; }
+
+  /* Tools dropdown menu in the tabs bar */
+  .tools-menu {
+    position: relative;
+    margin-right: 12px;
+  }
+  .tools-btn {
+    width: auto;
+    background: transparent;
+    color: var(--fg-2);
+    border: 1px solid var(--border);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: normal;
+    margin: 0;
+    cursor: pointer;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .tools-btn:hover:not(:disabled) {
+    background: var(--bg-2);
+    color: var(--fg);
+    border-color: var(--border-strong);
+  }
+  .tools-btn .caret { font-size: 10px; opacity: 0.8; }
+  .tools-popup {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: var(--shadow-tip);
+    display: none;
+    flex-direction: column;
+    min-width: 200px;
+    z-index: 200;
+    padding: 4px 0;
+  }
+  .tools-popup.open { display: flex; }
+  .tools-popup button {
+    width: 100%;
+    background: transparent;
+    color: var(--fg);
+    border: none;
+    padding: 8px 14px;
+    text-align: left;
+    font-size: 12px;
+    cursor: pointer;
+    margin: 0;
+    border-radius: 0;
+    font-weight: normal;
+  }
+  .tools-popup button:hover:not(:disabled) { background: var(--bg-2); }
+  .tools-sep {
+    height: 1px;
+    background: var(--border-soft);
+    margin: 4px 0;
+  }
+
+  /* Help icon + tooltip */
+  .help {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--border-soft);
+    color: var(--fg-faint);
+    font-size: 10px;
+    font-weight: bold;
+    cursor: help;
+    margin-left: 6px;
+    user-select: none;
+    flex-shrink: 0;
+    transition: background 0.1s, color 0.1s;
+  }
+  .help:hover { background: var(--accent); color: #fff; }
+  .tooltip {
+    position: fixed;
+    background: var(--bg-3);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    color: var(--fg);
+    max-width: 280px;
+    line-height: 1.5;
+    z-index: 1000;
+    pointer-events: none;
+    box-shadow: var(--shadow-tip);
+  }
+
+  /* Progress bar */
+  .progress {
+    position: relative;
+    height: 22px;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .progress-bar {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+    width: 0%;
+    transition: width 0.15s ease;
+  }
+  .progress-text {
+    position: absolute; inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #fff;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<header>
+  <h1>CNC Image Engraver — G-code Generator</h1>
+  <button id="themeToggle" class="theme-toggle" title="Toggle light / dark theme"><span id="themeIcon">☀</span><span id="themeLabel">Light</span></button>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+
+    <div class="group">
+      <div class="group-title">Image</div>
+      <div class="field">
+        <input type="file" id="imageInput" accept="image/*">
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Output Mode</div>
+      <div class="field">
+        <label>Machine</label>
+        <select id="outputMode">
+          <option value="cnc">CNC mill / router (Z depth)</option>
+          <option value="laser">Laser engraver (power)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Material (display)</div>
+      <div class="field">
+        <label>Type</label>
+        <select id="woodType">
+          <optgroup label="Wood">
+            <option value="oak">Oak</option>
+            <option value="walnut">Walnut</option>
+            <option value="pine" selected>Pine</option>
+            <option value="cherry">Cherry</option>
+            <option value="maple">Maple</option>
+            <option value="mahogany">Mahogany</option>
+            <option value="birch">Birch</option>
+            <option value="mdf">MDF</option>
+            <option value="plywood_birch">Birch plywood</option>
+          </optgroup>
+          <optgroup label="Plastic">
+            <option value="acrylic_black">Acrylic — black</option>
+            <option value="acrylic_white">Acrylic — white</option>
+            <option value="acrylic_clear">Acrylic — clear</option>
+          </optgroup>
+          <optgroup label="Metal">
+            <option value="brass">Brass</option>
+            <option value="stainless">Stainless steel</option>
+            <option value="anodized_black">Anodized aluminum — black</option>
+            <option value="anodized_red">Anodized aluminum — red</option>
+            <option value="anodized_blue">Anodized aluminum — blue</option>
+          </optgroup>
+          <optgroup label="Other">
+            <option value="mirror">Mirror</option>
+            <option value="glass">Glass</option>
+            <option value="leather">Leather</option>
+            <option value="slate">Slate</option>
+            <option value="cork">Cork</option>
+            <option value="cardboard">Cardboard</option>
+          </optgroup>
+        </select>
+        <div class="info">Used for the 3D and Final Render previews. Has no effect on G-code.</div>
+      </div>
+      <div class="field">
+        <label>Pattern scale (mm) <span class="val" id="grainScaleVal">80</span></label>
+        <input type="range" id="grainScale" min="20" max="200" value="80" step="5">
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Final Dimensions</div>
+      <div class="info" id="imagePxInfo">No image loaded</div>
+      <div class="row">
+        <div class="field">
+          <label>Width (mm)</label>
+          <input type="number" id="widthMm" value="100" min="1" step="0.1">
+        </div>
+        <div class="field">
+          <label>Height (mm)</label>
+          <input type="number" id="heightMm" value="100" min="1" step="0.1">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Scale (%) <span class="val" id="scalePctVal">—</span></label>
+          <input type="number" id="scalePct" value="100" min="0.1" step="1">
+        </div>
+        <div class="field">
+          <label>Resolution</label>
+          <input type="text" id="dpiInfo" value="—" readonly>
+        </div>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="lockAspect" checked>
+        <label for="lockAspect">Keep aspect ratio</label>
+      </div>
+      <div class="info">100% scale = 1 mm per source pixel. Locking the ratio keeps the image's native proportions.</div>
+    </div>
+
+    <div class="group">
+      <div class="group-title cnc-only">Carving Bit</div>
+      <div class="group-title laser-only">Laser Beam</div>
+      <div class="field cnc-only">
+        <label>Preset</label>
+        <select id="bitPreset">
+          <option value="custom">— Custom —</option>
+          <option value="flat-1">Flat end mill 1.0 mm</option>
+          <option value="flat-3">Flat end mill 3.0 mm</option>
+          <option value="ball-2">Ball end mill 2.0 mm</option>
+          <option value="ball-3">Ball end mill 3.0 mm</option>
+          <option value="v-60">V-bit 60°</option>
+          <option value="v-90">V-bit 90°</option>
+          <option value="v-30">V-bit 30°</option>
+        </select>
+      </div>
+      <div class="field cnc-only">
+        <label>Type</label>
+        <select id="bitType">
+          <option value="flat">Flat end mill</option>
+          <option value="ball">Ball end mill</option>
+          <option value="vbit">V-bit (conical)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label><span class="cnc-only">Diameter (mm)</span><span class="laser-only">Beam kerf (mm)</span></label>
+          <input type="number" id="bitDiameter" value="3.0" min="0.05" step="0.05">
+        </div>
+        <div class="field cnc-only" id="bitAngleField">
+          <label>V angle (°)</label>
+          <input type="number" id="bitAngle" value="60" min="10" max="170" step="1">
+        </div>
+      </div>
+      <div class="field cnc-only">
+        <label>Stepover <span class="val" id="stepoverVal">60%</span></label>
+        <input type="range" id="stepover" min="10" max="95" value="60">
+      </div>
+      <div class="field laser-only">
+        <label>Line spacing (mm) <span class="val" id="lineSpacingInfo">—</span></label>
+        <input type="number" id="laserLineSpacing" value="0.1" min="0.01" max="2" step="0.01">
+      </div>
+      <div class="field">
+        <label>X resolution (steps/mm)</label>
+        <input type="number" id="xRes" value="8" min="0.5" max="40" step="0.5">
+      </div>
+      <div class="info" id="bitInfo"></div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Image Processing</div>
+      <div class="field">
+        <label>Grayscale levels <span class="val" id="levelsVal">256</span></label>
+        <input type="range" id="levels" min="2" max="256" value="256">
+      </div>
+      <div class="field">
+        <label>Dither</label>
+        <select id="dither">
+          <option value="none">None</option>
+          <option value="floyd">Floyd–Steinberg (error diffusion)</option>
+          <option value="atkinson">Atkinson (classic Mac)</option>
+          <option value="ordered">Ordered (Bayer 4×4)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Sharpness <span class="val" id="sharpnessVal">0</span></label>
+        <input type="range" id="sharpness" min="0" max="100" value="0">
+      </div>
+      <div class="field">
+        <label>Brightness <span class="val" id="brightnessVal">0</span></label>
+        <input type="range" id="brightness" min="-100" max="100" value="0">
+      </div>
+      <div class="field">
+        <label>Contrast <span class="val" id="contrastVal">0</span></label>
+        <input type="range" id="contrast" min="-100" max="100" value="0">
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="invert">
+        <label for="invert">Invert image</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Output Range</div>
+      <div class="field cnc-only">
+        <label>Max engraving depth (mm) for black</label>
+        <input type="number" id="maxDepth" value="1.5" min="0" step="0.1">
+        <div class="info">Z = -maxDepth at black, Z = 0 at white</div>
+      </div>
+      <div class="field cnc-only">
+        <label>Max Z (safe travel height, mm)</label>
+        <input type="number" id="zSafe" value="5" min="0" step="0.1">
+      </div>
+      <div class="row laser-only">
+        <div class="field">
+          <label>Max power (S, black)</label>
+          <input type="number" id="maxPower" value="1000" min="1" step="10">
+        </div>
+        <div class="field">
+          <label>Min power (S, white)</label>
+          <input type="number" id="minPower" value="0" min="0" step="10">
+        </div>
+      </div>
+      <div class="row laser-only">
+        <div class="field">
+          <label>Threshold preset</label>
+          <select id="firingPreset">
+            <option value="custom">— Custom —</option>
+            <option value="off">Off — no threshold</option>
+            <option value="fiber">Fiber / galvo</option>
+            <option value="diode-strong">Diode 10W+</option>
+            <option value="diode-weak">Diode &lt; 10W</option>
+            <option value="co2-new">CO₂ — new tube</option>
+            <option value="co2-typical">CO₂ — typical</option>
+            <option value="co2-weak">CO₂ — old / weak</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Min firing power (S)</label>
+          <input type="number" id="minFiringS" value="0" min="0" step="5">
+        </div>
+      </div>
+      <div class="info laser-only">Sub-threshold pixels are skipped (laser off, rapid over). Presets are starting points — every laser/tube/focus calibrates a bit differently, so test on scrap.</div>
+      <div class="field laser-only">
+        <label>Focal Z (mm)</label>
+        <input type="number" id="focalZ" value="0" step="0.1">
+        <div class="info">Park height for the laser head. Many setups leave Z fixed; set 0 to omit Z from output.</div>
+      </div>
+      <div class="field laser-only">
+        <label>Laser command</label>
+        <select id="laserMode">
+          <option value="m4">M4 — dynamic power (scales with feed)</option>
+          <option value="m3">M3 — constant power</option>
+        </select>
+        <div class="info">GRBL: M4 is safer (laser pauses when motion stops).</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Passes</div>
+      <div class="cnc-only">
+        <div class="field">
+          <label>Layer depth (mm / pass) <span class="val" id="layerCount">— layers</span></label>
+          <input type="number" id="maxPerPass" value="0.5" min="0" step="0.05">
+          <div class="info">0 = single pass to full depth</div>
+        </div>
+        <button id="autoLayerBtn" class="secondary" style="margin-top:4px;">Use recommended layer depth</button>
+        <div class="info" id="passInfo"></div>
+      </div>
+      <div class="field laser-only">
+        <label>Number of passes</label>
+        <input type="number" id="laserPasses" value="1" min="1" max="50" step="1">
+        <div class="info">Repeats the full engraving N times. Useful to darken or deepen marks.</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Motion / Power</div>
+      <div class="row">
+        <div class="field">
+          <label>Feed rate (mm/min)</label>
+          <input type="number" id="feedRate" value="800" min="1">
+        </div>
+        <div class="field cnc-only">
+          <label>Plunge rate</label>
+          <input type="number" id="plungeRate" value="200" min="1">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Rapid rate (G0)</label>
+          <input type="number" id="rapidRate" value="3000" min="1">
+        </div>
+        <div class="field cnc-only">
+          <label>Spindle RPM</label>
+          <input type="number" id="spindle" value="10000" min="0">
+        </div>
+      </div>
+      <div class="field">
+        <label>Cutting angle (°) <span class="val" id="cuttingAngleVal">0</span></label>
+        <input type="range" id="cuttingAngle" min="0" max="180" value="0" step="1">
+        <div class="info">0° = horizontal scans · 90° = vertical · 45° = diagonal. Cut grooves run perpendicular to this — useful for matching wood grain.</div>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="skipWhite" checked>
+        <label for="skipWhite">Skip white pixels (rapid over)</label>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="bidirectional" checked>
+        <label for="bidirectional">Bidirectional (zigzag)</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Border Frame</div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="frameEnable">
+        <label for="frameEnable">Trace border before engraving</label>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Margin (mm)</label>
+          <input type="number" id="frameMargin" value="2" min="0" step="0.5">
+        </div>
+        <div class="field">
+          <label>Speed (mm/min)</label>
+          <input type="number" id="frameSpeed" value="1500" min="1">
+        </div>
+      </div>
+      <div class="field cnc-only">
+        <label>Depth (mm)</label>
+        <input type="number" id="frameDepth" value="0.3" min="0" step="0.05">
+        <div class="info">Set 0 for a dry-run trace at safe Z (no cut).</div>
+      </div>
+      <div class="field laser-only">
+        <label>Power (S)</label>
+        <input type="number" id="framePower" value="300" min="0" step="10">
+        <div class="info">Low power (~10–30%) gives a visible-only trace for positioning; higher power scores a real outline.</div>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="framePasses2">
+        <label for="framePasses2">Trace twice (helps see faint laser dots)</label>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">G-code Output</div>
+      <div class="field">
+        <label>Dialect / Optimizer</label>
+        <select id="dialect">
+          <option value="generic">Generic G-code</option>
+          <option value="grbl" selected>GRBL / FluidNC</option>
+          <option value="marlin">Marlin (3D printer firmware)</option>
+          <option value="linuxcnc">LinuxCNC</option>
+        </select>
+      </div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="compactGcode">
+        <label for="compactGcode">Compact output (strip spaces &amp; trailing zeros)</label>
+      </div>
+      <div class="field">
+        <label>Custom prologue (optional)</label>
+        <textarea id="prologue" rows="2" placeholder="e.g. $H&#10;G54"></textarea>
+      </div>
+      <div class="field">
+        <label>Custom epilogue (optional)</label>
+        <textarea id="epilogue" rows="2" placeholder="e.g. G0 X0 Y0"></textarea>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="info" id="timeEstimate" style="font-size:13px; color:var(--estimate-fg); margin-bottom:8px; min-height:18px;">Estimated time: —</div>
+      <button id="generateBtn" disabled>Generate G-code &amp; Toolpath</button>
+      <button id="downloadBtn" class="secondary" disabled>Download .gcode</button>
+      <div class="progress">
+        <div class="progress-bar" id="progressBar"></div>
+        <div class="progress-text" id="progressText">Ready</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-title">Settings</div>
+      <div class="info" id="saveInfo">Settings auto-save to this browser.</div>
+      <button id="resetSettingsBtn" class="secondary">Reset all to defaults</button>
+    </div>
+
+  </div>
+
+  <div class="resize-handle" id="resizeHandle" title="Drag to resize sidebar"></div>
+
+  <div class="main">
+    <div class="tabs">
+      <div class="tab active" data-tab="2d">2D Preview</div>
+      <div class="tab" data-tab="3d">3D Preview</div>
+      <div class="tab" data-tab="final">Final Render</div>
+      <div class="tab-spacer"></div>
+      <div class="tab-tools" id="tools3d" style="display:none">
+        <label><input type="checkbox" id="showToolpath"> Toolpath</label>
+        <label><input type="checkbox" id="showRapids"> Rapids</label>
+        <label><input type="checkbox" id="showWood" checked> Wood block</label>
+      </div>
+      <div class="tools-menu">
+        <button class="tools-btn" id="toolsBtn" type="button">Tools <span class="caret">▾</span></button>
+        <div class="tools-popup" id="toolsPopup">
+          <button data-tool="fliph"  type="button">↔ Flip horizontal</button>
+          <button data-tool="flipv"  type="button">↕ Flip vertical</button>
+          <button data-tool="rotccw" type="button">↶ Rotate 90° CCW</button>
+          <button data-tool="rotcw"  type="button">↷ Rotate 90° CW</button>
+          <button data-tool="rot180" type="button">⟲ Rotate 180°</button>
+          <div class="tools-sep"></div>
+          <button data-tool="reset"  type="button">Reset transforms</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="preview-stack">
+      <div class="pane pane2d active" id="pane2d">
+        <canvas id="canvas2d" width="400" height="400"></canvas>
+      </div>
+      <div class="pane pane3d" id="pane3d">
+        <canvas id="canvas3d"></canvas>
+        <div class="pane3d-hint">Drag to orbit · Right-drag to pan · Scroll to zoom</div>
+      </div>
+      <div class="pane pane3d" id="panefinal">
+        <canvas id="canvasfinal"></canvas>
+        <div class="pane3d-hint">Final-render preview — wood texture + burned engraving</div>
+      </div>
+    </div>
+
+    <div class="gcode-area">
+      <div class="header">
+        <span>G-code Output (preview)</span>
+        <span id="gcodeStats"></span>
+      </div>
+      <textarea id="gcodeOutput" readonly placeholder="Load an image and click 'Generate G-code & Toolpath'..."></textarea>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = (id) => document.getElementById(id);
+
+// --- DOM refs ---
+const imageInput   = $('imageInput');
+const widthMmIn    = $('widthMm');
+const heightMmIn   = $('heightMm');
+const scalePctIn   = $('scalePct');
+const dpiInfo      = $('dpiInfo');
+const imagePxInfo  = $('imagePxInfo');
+const lockAspect   = $('lockAspect');
+const bitPresetIn  = $('bitPreset');
+const bitTypeIn    = $('bitType');
+const bitDiamIn    = $('bitDiameter');
+const bitAngleIn   = $('bitAngle');
+const bitAngleField= $('bitAngleField');
+const stepoverIn   = $('stepover');
+const xResIn       = $('xRes');
+const bitInfo      = $('bitInfo');
+const levelsIn     = $('levels');
+const sharpnessIn  = $('sharpness');
+const brightnessIn = $('brightness');
+const contrastIn   = $('contrast');
+const invertIn     = $('invert');
+const maxDepthIn   = $('maxDepth');
+const zSafeIn      = $('zSafe');
+const maxPerPassIn = $('maxPerPass');
+const passInfo     = $('passInfo');
+const feedRateIn   = $('feedRate');
+const plungeRateIn = $('plungeRate');
+const rapidRateIn  = $('rapidRate');
+const spindleIn    = $('spindle');
+const ditherIn     = $('dither');
+const dialectIn    = $('dialect');
+const compactGcodeIn = $('compactGcode');
+const prologueIn   = $('prologue');
+const epilogueIn   = $('epilogue');
+const frameEnableIn  = $('frameEnable');
+const frameMarginIn  = $('frameMargin');
+const frameSpeedIn   = $('frameSpeed');
+const frameDepthIn   = $('frameDepth');
+const framePowerIn   = $('framePower');
+const framePasses2In = $('framePasses2');
+const skipWhiteIn  = $('skipWhite');
+const biIn         = $('bidirectional');
+const cuttingAngleIn = $('cuttingAngle');
+const outputModeIn = $('outputMode');
+const maxPowerIn   = $('maxPower');
+const minPowerIn   = $('minPower');
+const minFiringSIn = $('minFiringS');
+const firingPresetIn = $('firingPreset');
+
+// Suggested S thresholds per laser kind. Values assume GRBL default $30=1000;
+// if your $30 is 255, scale these accordingly via Max power. Rough starting
+// points — real-world threshold depends on tube/diode condition and focus.
+const FIRING_PRESETS = {
+  'off':            0,
+  'fiber':          0,    // fiber/galvo have hard internal threshold
+  'diode-strong':  30,
+  'diode-weak':    60,
+  'co2-new':       80,
+  'co2-typical':  120,
+  'co2-weak':     150,
+};
+firingPresetIn.addEventListener('change', () => {
+  const key = firingPresetIn.value;
+  if (key === 'custom') return;
+  if (key in FIRING_PRESETS) {
+    minFiringSIn.value = FIRING_PRESETS[key];
+    minFiringSIn.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+});
+// Editing the value manually flips the preset back to "custom". When the
+// value was just programmatically set BY a preset selection, the new number
+// matches that preset's S — so don't reset to custom in that case.
+minFiringSIn.addEventListener('input', () => {
+  const v = parseFloat(minFiringSIn.value) || 0;
+  const key = firingPresetIn.value;
+  if (key !== 'custom' && FIRING_PRESETS[key] === v) return;
+  firingPresetIn.value = 'custom';
+});
+const focalZIn     = $('focalZ');
+const laserModeIn  = $('laserMode');
+const laserPassesIn= $('laserPasses');
+const laserLineSpacingIn = $('laserLineSpacing');
+const generateBtn  = $('generateBtn');
+const downloadBtn  = $('downloadBtn');
+const gcodeOut     = $('gcodeOutput');
+const canvas2d     = $('canvas2d');
+const ctx2d        = canvas2d.getContext('2d');
+const progressBar  = $('progressBar');
+const progressText = $('progressText');
+const pixelInfo    = $('bitInfo'); // reused
+const gcodeStats   = $('gcodeStats');
+
+let originalImage = null;
+let processedData = null;
+let gcodeBlob = null;     // Blob ready for download
+let aspectRatio = 1;
+let processTimer = null;
+let generating = false;
+
+// ---- Bit presets ----
+const PRESETS = {
+  'flat-1': { type: 'flat', diameter: 1.0 },
+  'flat-3': { type: 'flat', diameter: 3.0 },
+  'ball-2': { type: 'ball', diameter: 2.0 },
+  'ball-3': { type: 'ball', diameter: 3.0 },
+  'v-60':   { type: 'vbit', diameter: 6.0, angle: 60 },
+  'v-90':   { type: 'vbit', diameter: 6.0, angle: 90 },
+  'v-30':   { type: 'vbit', diameter: 6.0, angle: 30 },
+};
+
+// ---- Output mode (CNC vs Laser) ----
+function applyOutputMode() {
+  const mode = outputModeIn.value || 'cnc';
+  document.body.classList.toggle('mode-cnc',   mode === 'cnc');
+  document.body.classList.toggle('mode-laser', mode === 'laser');
+}
+outputModeIn.addEventListener('change', applyOutputMode);
+applyOutputMode();
+
+function applyBitPreset() {
+  const p = PRESETS[bitPresetIn.value];
+  if (!p) return;
+  bitTypeIn.value = p.type;
+  bitDiamIn.value = p.diameter;
+  if (p.angle != null) bitAngleIn.value = p.angle;
+  onBitChange();
+}
+bitPresetIn.addEventListener('change', applyBitPreset);
+
+function effectiveBitWidth() {
+  const type = bitTypeIn.value;
+  const dia  = parseFloat(bitDiamIn.value);
+  const maxD = parseFloat(maxDepthIn.value);
+  if (type === 'vbit') {
+    const ang = parseFloat(bitAngleIn.value);
+    const half = (ang / 2) * Math.PI / 180;
+    return Math.max(0.05, 2 * maxD * Math.tan(half));
+  }
+  return Math.max(0.05, dia);
+}
+
+function lineSpacingMm() {
+  if (outputModeIn.value === 'laser') {
+    // Laser engraving: line spacing is specified directly (common in laser
+    // software where you set DPI or lines-per-mm rather than a bit-stepover).
+    return Math.max(0.01, parseFloat(laserLineSpacingIn.value) || 0.1);
+  }
+  const w = effectiveBitWidth();
+  return Math.max(0.05, w * parseFloat(stepoverIn.value) / 100);
+}
+function updateLineSpacingInfo() {
+  const ls = parseFloat(laserLineSpacingIn.value) || 0.1;
+  const dpi = 25.4 / ls;
+  $('lineSpacingInfo').textContent = `${dpi.toFixed(0)} DPI`;
+}
+
+function onBitChange() {
+  bitPresetIn.value = 'custom';
+  bitAngleField.style.display = (bitTypeIn.value === 'vbit') ? '' : 'none';
+  updateBitInfo();
+  updatePassInfo();
+  scheduleProcess();
+}
+bitTypeIn.addEventListener('change', onBitChange);
+bitDiamIn.addEventListener('input', onBitChange);
+bitAngleIn.addEventListener('input', onBitChange);
+stepoverIn.addEventListener('input', () => {
+  $('stepoverVal').textContent = stepoverIn.value + '%';
+  updateBitInfo();
+  scheduleProcess();
+});
+
+function scanGeometry() {
+  // Compute the rotated scan/perp ranges for the current cutting angle. Used
+  // by both the info display and the G-code generator.
+  const widthMm  = parseFloat(widthMmIn.value);
+  const heightMm = parseFloat(heightMmIn.value);
+  const ang = (parseFloat(cuttingAngleIn.value) || 0) * Math.PI / 180;
+  const cosA = Math.cos(ang), sinA = Math.sin(ang);
+  let sMin = Infinity, sMax = -Infinity, pMin = Infinity, pMax = -Infinity;
+  for (const [x, y] of [[0,0], [widthMm,0], [0,heightMm], [widthMm,heightMm]]) {
+    const s =  x*cosA + y*sinA;
+    const p = -x*sinA + y*cosA;
+    if (s < sMin) sMin = s; if (s > sMax) sMax = s;
+    if (p < pMin) pMin = p; if (p > pMax) pMax = p;
+  }
+  return { cosA, sinA, sMin, sMax, pMin, pMax, scanLen: sMax - sMin, perpLen: pMax - pMin };
+}
+
+function updateBitInfo() {
+  const isLaser = outputModeIn.value === 'laser';
+  const ls = lineSpacingMm();
+  const type = bitTypeIn.value;
+  const w = effectiveBitWidth();
+  const xRes = parseFloat(xResIn.value);
+  const g = scanGeometry();
+  const cols = Math.max(1, Math.round(g.scanLen * xRes));
+  const lines = Math.max(1, Math.round(g.perpLen / ls));
+
+  let txt = '';
+  if (isLaser) {
+    txt = `Beam kerf: ${w.toFixed(2)} mm · `;
+  } else if (type === 'vbit') {
+    txt = `V-bit effective width @ max depth: ${w.toFixed(2)} mm · `;
+  } else {
+    txt = `Effective bit width: ${w.toFixed(2)} mm · `;
+  }
+  txt += `Line spacing: ${ls.toFixed(3)} mm · Grid: ${cols}×${lines} samples (${(cols*lines).toLocaleString()})`;
+  bitInfo.textContent = txt;
+}
+// Refresh the info line whenever the user switches modes
+outputModeIn.addEventListener('change', updateBitInfo);
+
+// ---- Layer / pass info ----
+function recommendedLayerDepth() {
+  // Rules of thumb for clean wood engraving:
+  //   flat end mill: up to ~50% of diameter
+  //   ball end mill: ~40% of diameter
+  //   V-bit:         small fixed depth (~0.3 mm) so the cone doesn't tear out
+  const dia = parseFloat(bitDiamIn.value);
+  switch (bitTypeIn.value) {
+    case 'vbit': return 0.3;
+    case 'ball': return Math.min(dia * 0.4, 0.8);
+    case 'flat':
+    default:     return Math.min(dia * 0.5, 1.0);
+  }
+}
+function schedulePass() { updatePassInfo(); }
+function updatePassInfo() {
+  const maxD = parseFloat(maxDepthIn.value);
+  const perPass = parseFloat(maxPerPassIn.value);
+  const rec = recommendedLayerDepth();
+  if (!perPass || perPass <= 0) {
+    $('layerCount').textContent = '1 layer';
+    passInfo.textContent = `Single pass to ${maxD.toFixed(2)} mm. Recommended layer depth for this bit: ${rec.toFixed(2)} mm.`;
+    passInfo.classList.remove('warn');
+    return;
+  }
+  const n = Math.ceil(maxD / perPass);
+  $('layerCount').textContent = `${n} layer${n>1?'s':''}`;
+  let msg = `${n} pass${n>1?'es':''} · ${perPass.toFixed(2)} mm each · final pass reaches ${maxD.toFixed(2)} mm. Recommended for this bit: ${rec.toFixed(2)} mm.`;
+  passInfo.textContent = msg;
+  passInfo.classList.toggle('warn', perPass > rec * 1.5 || n > 8);
+}
+maxPerPassIn.addEventListener('input', updatePassInfo);
+maxDepthIn.addEventListener('input', () => {
+  updatePassInfo();
+  updateBitInfo();
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+$('autoLayerBtn').addEventListener('click', () => {
+  maxPerPassIn.value = recommendedLayerDepth().toFixed(2);
+  updatePassInfo();
+  updateTimeEstimate();
+});
+
+// ---- Live time estimate ----
+// Quick approximation; the precise number shows in the gcode-stats line after
+// Generate. Approximation samples processedData once to get the "cut content"
+// ratio (how many pixels need cutting vs. skipped white), then projects
+// distances from the scan geometry.
+function updateTimeEstimate() {
+  const el = $('timeEstimate');
+  if (!el) return;
+  if (!processedData) { el.textContent = 'Estimated time: load an image first'; return; }
+
+  const data = processedData.data;
+  const Wp = processedData.width, Hp = processedData.height;
+  const skipWhite = skipWhiteIn.checked;
+  // Sample once across the image to estimate the fraction of pixels that need
+  // cutting and the average tone (for plunge depth in CNC mode).
+  let cutCount = 0, sumDepth = 0, total = 0;
+  // Stride for speed on big images
+  const stride = Math.max(1, Math.floor((Wp * Hp) / 50000));
+  for (let i = 0; i < Wp * Hp; i += stride) {
+    const v = data[i * 4];
+    if (!(skipWhite && v >= 254)) cutCount++;
+    sumDepth += (255 - v) / 255;
+    total++;
+  }
+  const cutFrac = cutCount / Math.max(1, total);
+  const avgDepth = sumDepth / Math.max(1, total);
+
+  const g = scanGeometry();
+  const xRes = parseFloat(xResIn.value) || 8;
+  const ls = lineSpacingMm();
+  const cols = Math.max(1, Math.round(g.scanLen * xRes));
+  const lines = Math.max(1, Math.round(g.perpLen / ls));
+
+  const isLaser = outputModeIn.value === 'laser';
+  const maxDepth = parseFloat(maxDepthIn.value) || 1.5;
+  const zSafe = parseFloat(zSafeIn.value) || 5;
+  const perPass = parseFloat(maxPerPassIn.value);
+  let numPasses;
+  if (isLaser) {
+    numPasses = Math.max(1, parseInt(laserPassesIn.value) || 1);
+  } else if (!perPass || perPass <= 0) {
+    numPasses = 1;
+  } else {
+    numPasses = Math.ceil(maxDepth / perPass);
+  }
+
+  const feedRate = parseFloat(feedRateIn.value) || 800;
+  const plungeRate = parseFloat(plungeRateIn.value) || 200;
+  const rapidRate = parseFloat(rapidRateIn.value) || 3000;
+  const ds = 1 / xRes;
+
+  // Cut distance: roughly cols × cutFrac samples per line × ds mm × lines × passes
+  const cutMm = cols * cutFrac * ds * lines * numPasses;
+  // Rapid: one retract + traverse + re-position per row, plus return-to-origin
+  const rapidPerRow = isLaser
+    ? g.scanLen * 0.4  // short hops over skipped sections
+    : (zSafe * 2 + g.scanLen * 0.4);
+  const rapidMm = lines * numPasses * rapidPerRow;
+  // Plunge: one plunge per row at the row's avg depth (CNC only)
+  const plungeMm = isLaser ? 0 : lines * numPasses * avgDepth * maxDepth;
+
+  let totalMin = cutMm / feedRate + plungeMm / plungeRate + rapidMm / rapidRate;
+
+  // Add border frame time if enabled.
+  if (frameEnableIn.checked) {
+    const m = Math.max(0, parseFloat(frameMarginIn.value) || 0);
+    const fs = Math.max(1, parseFloat(frameSpeedIn.value) || feedRate);
+    const perimeter = 2 * ((widthMm + 2*m) + (heightMm + 2*m));
+    const loops = framePasses2In.checked ? 2 : 1;
+    totalMin += (perimeter * loops) / fs;
+  }
+
+  el.textContent = `Estimated time: ~${formatJobTime(totalMin)}`;
+}
+// Recompute when anything time-relevant changes
+[
+  'widthMm','heightMm','xRes','stepover','laserLineSpacing','bitDiameter','bitAngle','bitType',
+  'maxDepth','zSafe','maxPerPass','feedRate','plungeRate','rapidRate',
+  'cuttingAngle','skipWhite','outputMode','laserPasses','levels','dither','invert',
+  'sharpness','brightness','contrast','minFiringS','minPower','maxPower',
+  'frameEnable','frameMargin','frameSpeed','frameDepth','framePower','framePasses2'
+].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('input', updateTimeEstimate);
+  el.addEventListener('change', updateTimeEstimate);
+});
+
+// ---- Settings persistence (localStorage) ----
+const STORAGE_KEY = 'gcodefun.settings.v1';
+const PERSISTED_IDS = [
+  // output mode
+  'outputMode',
+  // dimensions
+  'widthMm', 'heightMm', 'scalePct', 'lockAspect',
+  // material
+  'woodType', 'grainScale',
+  // bit
+  'bitPreset', 'bitType', 'bitDiameter', 'bitAngle', 'stepover', 'xRes',
+  // image processing
+  'levels', 'sharpness', 'brightness', 'contrast', 'invert', 'dither',
+  // CNC depth
+  'maxDepth', 'zSafe',
+  // laser power
+  'maxPower', 'minPower', 'minFiringS', 'firingPreset', 'focalZ', 'laserMode', 'laserPasses', 'laserLineSpacing',
+  // layers
+  'maxPerPass',
+  // cutting / motion
+  'feedRate', 'plungeRate', 'rapidRate', 'spindle', 'cuttingAngle', 'skipWhite', 'bidirectional',
+  // output dialect / minification
+  'dialect', 'compactGcode', 'prologue', 'epilogue',
+  // border frame
+  'frameEnable', 'frameMargin', 'frameSpeed', 'frameDepth', 'framePower', 'framePasses2',
+];
+
+function saveSettings() {
+  const data = {};
+  for (const id of PERSISTED_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    data[id] = (el.type === 'checkbox') ? el.checked : el.value;
+  }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch (e) { /* quota full / private mode — silently ignore */ }
+}
+
+function loadSettings() {
+  let data = null;
+  try { data = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
+  catch (e) {}
+  if (!data) return false;
+  for (const id of PERSISTED_IDS) {
+    const el = $(id);
+    if (!el || !(id in data)) continue;
+    if (el.type === 'checkbox') el.checked = !!data[id];
+    else el.value = data[id];
+  }
+  // Tell every dependent control to recompute its derived state (slider value
+  // labels, bit info, pass info, etc.) — programmatic .value assignment does
+  // NOT fire input events.
+  for (const id of PERSISTED_IDS) {
+    const el = $(id);
+    if (!el) continue;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  return true;
+}
+
+$('resetSettingsBtn').addEventListener('click', () => {
+  if (!confirm('Reset all settings to defaults? This will reload the page.')) return;
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  location.reload();
+});
+
+// Auto-save (debounced) on any change to a persisted input
+let _saveTimer = null;
+function scheduleSave() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveSettings, 300);
+}
+for (const id of PERSISTED_IDS) {
+  const el = $(id);
+  if (!el) continue;
+  el.addEventListener('input', scheduleSave);
+  el.addEventListener('change', scheduleSave);
+}
+
+// (loadSettings() is called at the end of the module, after every listener
+// has been wired — so dispatched input/change events propagate everywhere.)
+
+// ---- Image loading ----
+let imgPxW = 0, imgPxH = 0;  // native pixel size of the loaded image
+
+// ----- Image transforms (flip / rotate) -----
+// Applied during processImage by drawing the source into the resampling
+// canvas with a 2D-context transform — the original `originalImage` is never
+// touched. Persisted to localStorage separately from the settings JSON
+// because they're per-image state.
+let imgRot = 0;          // 0, 90, 180, 270 (degrees, clockwise)
+let imgFlipH = false;
+let imgFlipV = false;
+const IMG_XFORM_KEY = 'gcodefun.imgTransform';
+(function loadImgTransform() {
+  try {
+    const t = JSON.parse(localStorage.getItem(IMG_XFORM_KEY) || 'null');
+    if (t) {
+      imgRot = [0,90,180,270].includes(t.rot) ? t.rot : 0;
+      imgFlipH = !!t.h;
+      imgFlipV = !!t.v;
+    }
+  } catch {}
+})();
+function saveImgTransform() {
+  try {
+    localStorage.setItem(IMG_XFORM_KEY,
+      JSON.stringify({ rot: imgRot, h: imgFlipH, v: imgFlipV }));
+  } catch {}
+}
+
+function applyImageTool(tool) {
+  switch (tool) {
+    case 'fliph':  imgFlipH = !imgFlipH; break;
+    case 'flipv':  imgFlipV = !imgFlipV; break;
+    case 'rotcw':
+      imgRot = (imgRot + 90) % 360;
+      swapWorkpieceDims();
+      break;
+    case 'rotccw':
+      imgRot = (imgRot + 270) % 360;
+      swapWorkpieceDims();
+      break;
+    case 'rot180':
+      imgRot = (imgRot + 180) % 360;
+      break;
+    case 'reset':
+      imgRot = 0; imgFlipH = false; imgFlipV = false;
+      break;
+  }
+  saveImgTransform();
+  scheduleProcess();
+}
+
+// 90°/270° rotations effectively swap the image's W/H, so the workpiece
+// dimensions follow to preserve aspect (image isn't squished into the old
+// landscape/portrait orientation).
+function swapWorkpieceDims() {
+  const w = widthMmIn.value;
+  widthMmIn.value = heightMmIn.value;
+  heightMmIn.value = w;
+  if (aspectRatio) aspectRatio = 1 / aspectRatio;
+  // Pixel dimensions of the source image effectively swap too — refresh the
+  // info readouts.
+  if (typeof updateScaleFromDims === 'function') updateScaleFromDims();
+  if (typeof updateDpiInfo === 'function') updateDpiInfo();
+}
+
+// ----- Tools dropdown wiring -----
+const toolsBtn   = $('toolsBtn');
+const toolsPopup = $('toolsPopup');
+toolsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toolsPopup.classList.toggle('open');
+});
+document.addEventListener('click', () => toolsPopup.classList.remove('open'));
+toolsPopup.addEventListener('click', (e) => e.stopPropagation());
+toolsPopup.querySelectorAll('button[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    applyImageTool(btn.dataset.tool);
+    toolsPopup.classList.remove('open');
+  });
+});
+
+imageInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      originalImage = img;
+      imgPxW = img.width;
+      imgPxH = img.height;
+      aspectRatio = img.width / img.height;
+      imagePxInfo.textContent = `Source image: ${imgPxW} × ${imgPxH} px`;
+      // Default workpiece: keep current width, derive height from image aspect.
+      heightMmIn.value = (parseFloat(widthMmIn.value) / aspectRatio).toFixed(2);
+      generateBtn.disabled = false;
+      updateScaleFromDims();
+      updateDpiInfo();
+      // Re-frame the 3D / Final Render cameras for the new image.
+      threeView.resetView();
+      finalView.resetView();
+      scheduleProcess();
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+// Recompute the Scale (%) display from the current Width relative to the
+// source image's pixel width. (100% = 1 mm per source pixel.)
+function updateScaleFromDims() {
+  if (imgPxW > 0) {
+    const w = parseFloat(widthMmIn.value);
+    const sc = (w / imgPxW) * 100;
+    scalePctIn.value = sc.toFixed(2);
+    $('scalePctVal').textContent = sc.toFixed(1) + '%';
+  } else {
+    scalePctIn.value = 100;
+    $('scalePctVal').textContent = '—';
+  }
+}
+function updateDpiInfo() {
+  if (imgPxW > 0) {
+    const w = parseFloat(widthMmIn.value);
+    const px = imgPxW / w;     // source pixels per mm
+    const dpi = px * 25.4;      // converted to DPI
+    dpiInfo.value = `${px.toFixed(1)} px/mm  (${dpi.toFixed(0)} DPI)`;
+  } else {
+    dpiInfo.value = '—';
+  }
+}
+
+// ---- Slider live labels ----
+function fmtLevels(v)    { return v >= 256 ? 'full (256)' : `${v} levels`; }
+function fmtSharpness(v) { return v == 0 ? 'off' : `${v}%`; }
+function fmtSigned(v)    { return v > 0 ? `+${v}` : `${v}`; }
+
+// Minify a G-code chunk: strip trailing zeros from decimals (so X10.500
+// becomes X10.5, X0.000 becomes X0), and remove inter-token whitespace on
+// command lines. Comments (lines starting with ';' or '(') are left alone, as
+// is the trailing ';comment' part of any line. Determinstic, line-by-line.
+function minifyGcodeChunk(chunk) {
+  return chunk.replace(/^[^\n]*$/gm, (line) => {
+    if (!line) return line;
+    const first = line.charCodeAt(0);
+    if (first === 0x3B /* ; */ || first === 0x28 /* ( */) return line;
+    const semi = line.indexOf(';');
+    let code    = semi >= 0 ? line.slice(0, semi) : line;
+    const tail  = semi >= 0 ? line.slice(semi)    : '';
+    // Drop trailing zeros: "12.300" -> "12.3", "12.000" -> "12"
+    code = code.replace(/(-?\d+)\.(\d+)/g, (_, ip, fp) => {
+      const t = fp.replace(/0+$/, '');
+      return t ? `${ip}.${t}` : ip;
+    });
+    // Squeeze inter-token whitespace inside the code portion
+    code = code.replace(/\s+/g, '');
+    return code + tail;
+  });
+}
+
+// Human-friendly machining time formatter. < 1 min shows seconds; up to an
+// hour shows minutes (with seconds if short); beyond an hour shows hours + min.
+function formatJobTime(min) {
+  if (!isFinite(min) || min <= 0) return '0s';
+  const totalSec = Math.round(min * 60);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (totalSec < 60) return `${totalSec}s`;
+  if (m >= 10) return `${m}m`;
+  return `${m}m ${s}s`;
+}
+function fmtAngle(v)     { return `${v}°`; }
+const SLIDER_FMT = {
+  levels: fmtLevels, sharpness: fmtSharpness,
+  brightness: fmtSigned, contrast: fmtSigned,
+  cuttingAngle: fmtAngle,
+};
+[['levels','levelsVal'], ['sharpness','sharpnessVal'],
+ ['brightness','brightnessVal'], ['contrast','contrastVal'],
+ ['cuttingAngle','cuttingAngleVal']]
+  .forEach(([inId, outId]) => {
+    const fmt = SLIDER_FMT[inId] || ((v) => v);
+    const update = () => { $(outId).textContent = fmt($(inId).value); };
+    $(inId).addEventListener('input', update);
+    update(); // initialise display
+  });
+cuttingAngleIn.addEventListener('input', () => {
+  updateBitInfo();
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+
+// ---- Dimensions / Scale / Aspect lock ----
+widthMmIn.addEventListener('input', () => {
+  if (lockAspect.checked && aspectRatio) {
+    heightMmIn.value = (parseFloat(widthMmIn.value) / aspectRatio).toFixed(2);
+  }
+  updateScaleFromDims();
+  updateDpiInfo();
+  scheduleProcess();
+});
+heightMmIn.addEventListener('input', () => {
+  if (lockAspect.checked && aspectRatio) {
+    widthMmIn.value = (parseFloat(heightMmIn.value) * aspectRatio).toFixed(2);
+  }
+  updateScaleFromDims();
+  updateDpiInfo();
+  scheduleProcess();
+});
+scalePctIn.addEventListener('input', () => {
+  // Scale always forces the workpiece back to the image's native aspect ratio
+  // (so the engraving isn't distorted). The lock-aspect checkbox only governs
+  // independent W/H editing.
+  if (imgPxW > 0) {
+    const sc = parseFloat(scalePctIn.value);
+    if (!(sc > 0)) return;
+    widthMmIn.value  = (imgPxW * sc / 100).toFixed(2);
+    heightMmIn.value = (imgPxH * sc / 100).toFixed(2);
+    $('scalePctVal').textContent = sc.toFixed(1) + '%';
+    updateDpiInfo();
+    scheduleProcess();
+  }
+});
+
+// ---- Reprocess triggers ----
+['xRes','levels','sharpness','brightness','contrast','invert','dither']
+  .forEach(id => $(id).addEventListener('input', scheduleProcess));
+ditherIn.addEventListener('change', scheduleProcess);
+['widthMm','heightMm','xRes'].forEach(id => $(id).addEventListener('input', updateBitInfo));
+
+function scheduleProcess() {
+  if (processTimer) clearTimeout(processTimer);
+  processTimer = setTimeout(processImage, 60);
+}
+
+// ---- Image processing ----
+// processedData stores the image at the *preview resolution* (xRes × xRes,
+// square pixels). The engraving grid — which has fewer rows in Y due to line
+// spacing — is sampled from this data on the fly when generating G-code or the
+// 3D heightmap. This keeps the 2D preview, brightness/contrast tweaks, and
+// sharpness filter operating on a high-fidelity grid even when line spacing is
+// coarse (e.g. for V-bits or large flat mills).
+function processImage() {
+  if (!originalImage) return;
+  const widthMm  = parseFloat(widthMmIn.value);
+  const heightMm = parseFloat(heightMmIn.value);
+  const xRes = parseFloat(xResIn.value);
+  if (!(widthMm > 0) || !(heightMm > 0) || !(xRes > 0)) return;
+
+  const W = Math.max(1, Math.round(widthMm * xRes));
+  const H = Math.max(1, Math.round(heightMm * xRes));
+
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tctx = tmp.getContext('2d');
+  // Apply image transforms (flip / rotate). Flips happen in canvas frame, then
+  // rotation, so "Flip H" always mirrors horizontally on screen regardless of
+  // the current rotation. For 90°/270° rotations the source is drawn into a
+  // rotated frame whose w/h are swapped vs. the canvas dimensions.
+  if (imgRot || imgFlipH || imgFlipV) {
+    tctx.save();
+    tctx.translate(W / 2, H / 2);
+    if (imgFlipH || imgFlipV) tctx.scale(imgFlipH ? -1 : 1, imgFlipV ? -1 : 1);
+    if (imgRot) tctx.rotate(imgRot * Math.PI / 180);
+    const swap = (imgRot === 90 || imgRot === 270);
+    const drawW = swap ? H : W;
+    const drawH = swap ? W : H;
+    tctx.drawImage(originalImage, -drawW / 2, -drawH / 2, drawW, drawH);
+    tctx.restore();
+  } else {
+    tctx.drawImage(originalImage, 0, 0, W, H);
+  }
+
+  let imageData = tctx.getImageData(0, 0, W, H);
+  toGrayscale(imageData);
+  applyBrightnessContrast(imageData, parseInt(brightnessIn.value), parseInt(contrastIn.value));
+  const sharpAmt = parseInt(sharpnessIn.value);
+  if (sharpAmt > 0) imageData = applySharpen(imageData, sharpAmt / 100);
+  const lvls = parseInt(levelsIn.value);
+  const ditherMode = ditherIn.value;
+  if (ditherMode === 'floyd' || ditherMode === 'ordered' || ditherMode === 'atkinson') {
+    // If the user picks a dither mode but leaves levels at 256, dithering
+    // would be a no-op (source is already 8-bit integer at step=1). Default
+    // to binary — the most common dither target — so the effect is visible.
+    const target = lvls < 256 ? lvls : 2;
+    if      (ditherMode === 'floyd')    applyFloydSteinberg(imageData, target);
+    else if (ditherMode === 'atkinson') applyAtkinson(imageData, target);
+    else                                 applyOrderedDither(imageData, target);
+  } else if (lvls < 256) {
+    applyLevels(imageData, lvls);
+  }
+  if (invertIn.checked) applyInvert(imageData);
+
+  processedData = imageData;
+  renderPreview2D();
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+  updateBitInfo();
+  updateTimeEstimate();
+}
+
+function toGrayscale(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+    d[i] = d[i+1] = d[i+2] = g;
+  }
+}
+function applyBrightnessContrast(imageData, brightness, contrast) {
+  if (!brightness && !contrast) return;
+  const d = imageData.data;
+  const c = (contrast / 100) + 1;
+  const intercept = 128 * (1 - c);
+  for (let i = 0; i < d.length; i += 4) {
+    let v = d[i] * c + intercept + brightness;
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    d[i] = d[i+1] = d[i+2] = v;
+  }
+}
+function applySharpen(imageData, amount) {
+  const W = imageData.width, H = imageData.height;
+  const src = imageData.data;
+  const out = new Uint8ClampedArray(src.length);
+  const center = 1 + 4 * amount;
+  const side = -amount;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      if (x === 0 || y === 0 || x === W-1 || y === H-1) {
+        out[i] = out[i+1] = out[i+2] = src[i];
+        out[i+3] = 255;
+        continue;
+      }
+      const up = src[((y-1)*W + x) * 4];
+      const dn = src[((y+1)*W + x) * 4];
+      const lf = src[(y*W + (x-1)) * 4];
+      const rt = src[(y*W + (x+1)) * 4];
+      let v = src[i] * center + (up + dn + lf + rt) * side;
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      out[i] = out[i+1] = out[i+2] = v;
+      out[i+3] = 255;
+    }
+  }
+  return new ImageData(out, W, H);
+}
+function applyLevels(imageData, levels) {
+  const d = imageData.data;
+  const step = 255 / (levels - 1);
+  for (let i = 0; i < d.length; i += 4) {
+    const q = Math.round(d[i] / step) * step;
+    d[i] = d[i+1] = d[i+2] = q;
+  }
+}
+
+// Floyd–Steinberg error-diffusion dither to `levels` discrete tones, with
+// serpentine traversal (alternate rows go right-to-left). Serpentine avoids
+// the rightward directional drift that left-to-right FS shows in flat areas.
+// Deterministic: same input always produces same output.
+// Float32 scratch buffer so propagated errors aren't clipped by the source
+// Uint8ClampedArray's 0..255 clamp.
+function applyFloydSteinberg(imageData, levels) {
+  const W = imageData.width, H = imageData.height;
+  const d = imageData.data;
+  const step = 255 / Math.max(1, levels - 1);
+  const buf = new Float32Array(W * H);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) buf[j] = d[i];
+  for (let y = 0; y < H; y++) {
+    const leftToRight = (y & 1) === 0;
+    const dir = leftToRight ? 1 : -1;
+    const xStart = leftToRight ? 0 : W - 1;
+    const xEnd   = leftToRight ? W : -1;
+    for (let x = xStart; x !== xEnd; x += dir) {
+      const idx = y * W + x;
+      const old = buf[idx];
+      let q = Math.round(old / step) * step;
+      if (q < 0) q = 0; else if (q > 255) q = 255;
+      buf[idx] = q;
+      const err = old - q;
+      // Diffuse to "ahead" pixel in current direction (dir = +1 or -1) and
+      // the three below-row neighbors mirrored accordingly.
+      const ahead = x + dir;
+      if (ahead >= 0 && ahead < W) buf[idx + dir] += err * (7/16);
+      if (y + 1 < H) {
+        const blIdx = idx + W - dir;     // "behind-below" in walk direction
+        const bIdx  = idx + W;
+        const brIdx = idx + W + dir;     // "ahead-below"
+        if (x - dir >= 0 && x - dir < W) buf[blIdx] += err * (3/16);
+        buf[bIdx] += err * (5/16);
+        if (ahead >= 0 && ahead < W)     buf[brIdx] += err * (1/16);
+      }
+    }
+  }
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    d[i] = d[i+1] = d[i+2] = buf[j];
+  }
+}
+
+// Atkinson dither (Bill Atkinson, original Macintosh). Diffuses only 6/8 of
+// the error to 6 neighbors — the "missing" 2/8 is intentionally discarded.
+// This gives the characteristic punchy, high-contrast look classic Mac
+// graphics had. Less faithful to source tones than Floyd–Steinberg, but
+// reads beautifully for line art and high-contrast subjects.
+//
+//   pixel diagram (X = current):
+//       . X 1 1
+//       1 1 1 .
+//       . 1 . .
+//   each "1" receives err/8.
+function applyAtkinson(imageData, levels) {
+  const W = imageData.width, H = imageData.height;
+  const d = imageData.data;
+  const step = 255 / Math.max(1, levels - 1);
+  const buf = new Float32Array(W * H);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) buf[j] = d[i];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = y * W + x;
+      const old = buf[idx];
+      let q = Math.round(old / step) * step;
+      if (q < 0) q = 0; else if (q > 255) q = 255;
+      buf[idx] = q;
+      const err = (old - q) / 8;
+      if (x + 1 < W)               buf[idx + 1]       += err;
+      if (x + 2 < W)               buf[idx + 2]       += err;
+      if (x > 0 && y + 1 < H)      buf[idx + W - 1]   += err;
+      if (y + 1 < H)               buf[idx + W]       += err;
+      if (x + 1 < W && y + 1 < H)  buf[idx + W + 1]   += err;
+      if (y + 2 < H)               buf[idx + 2 * W]   += err;
+    }
+  }
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    d[i] = d[i+1] = d[i+2] = buf[j];
+  }
+}
+
+// Ordered (Bayer 4×4) dither — fixed pattern, no per-pixel error tracking.
+// Cheaper than Floyd–Steinberg but produces a regular crosshatch pattern.
+const BAYER4 = [
+  [ 0,  8,  2, 10],
+  [12,  4, 14,  6],
+  [ 3, 11,  1,  9],
+  [15,  7, 13,  5],
+];
+function applyOrderedDither(imageData, levels) {
+  const W = imageData.width, H = imageData.height;
+  const d = imageData.data;
+  const step = 255 / Math.max(1, levels - 1);
+  for (let y = 0; y < H; y++) {
+    const row = BAYER4[y & 3];
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 4;
+      // bias in [-0.5, +0.46875] of one step
+      const bias = (row[x & 3] - 7.5) / 16;
+      let q = Math.round(d[idx] / step + bias) * step;
+      if (q < 0) q = 0; else if (q > 255) q = 255;
+      d[idx] = d[idx+1] = d[idx+2] = q;
+    }
+  }
+}
+function applyInvert(imageData) {
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255 - d[i]; d[i+1] = 255 - d[i+1]; d[i+2] = 255 - d[i+2];
+  }
+}
+
+function renderPreview2D() {
+  if (!processedData) return;
+  const W = processedData.width, H = processedData.height;
+  const widthMm  = parseFloat(widthMmIn.value);
+  const heightMm = parseFloat(heightMmIn.value);
+  // Size the display canvas to the *physical* aspect ratio of the workpiece,
+  // not the pixel-grid aspect. X resolution (steps/mm) and line spacing differ
+  // in general, so the W×H grid is anisotropic; we stretch it back here so the
+  // preview reflects what will actually be engraved.
+  const maxW = 800, maxH = 600;
+  const aspect = (widthMm > 0 && heightMm > 0) ? (widthMm / heightMm) : (W / H);
+  let displayW = maxW;
+  let displayH = displayW / aspect;
+  if (displayH > maxH) { displayH = maxH; displayW = displayH * aspect; }
+  canvas2d.width  = Math.max(1, Math.round(displayW));
+  canvas2d.height = Math.max(1, Math.round(displayH));
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  tmp.getContext('2d').putImageData(processedData, 0, 0);
+  // Nearest-neighbour rendering. The processed image is already at xRes×xRes
+  // (high-res square pixels), so jagged scaling isn't an issue — and crucially,
+  // it lets posterization bands and sharpened edges show through clearly
+  // instead of being smoothed back into gradients.
+  ctx2d.imageSmoothingEnabled = false;
+  ctx2d.drawImage(tmp, 0, 0, canvas2d.width, canvas2d.height);
+}
+
+// ---------- Progress UI ----------
+function setProgress(pct, text) {
+  progressBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (text != null) progressText.textContent = text;
+}
+const yieldUI = () => new Promise(r => setTimeout(r, 0));
+
+// ---------- Toolpath + G-code generation (async, chunked) ----------
+async function generateAll() {
+  if (!processedData || generating) return;
+  generating = true;
+  generateBtn.disabled = true;
+  downloadBtn.disabled = true;
+  setProgress(0, 'Preparing...');
+
+  try {
+    const data = processedData.data;
+    const Wp = processedData.width;   // preview / source resolution (xRes × xRes)
+    const Hp = processedData.height;
+    const widthMm  = parseFloat(widthMmIn.value);
+    const heightMm = parseFloat(heightMmIn.value);
+    const maxDepth = parseFloat(maxDepthIn.value);
+    const zSafe    = parseFloat(zSafeIn.value);
+    const feedRate = parseFloat(feedRateIn.value);
+    const plunge   = parseFloat(plungeRateIn.value);
+    const spindle  = parseFloat(spindleIn.value);
+    const skipWhite= skipWhiteIn.checked;
+    const bidir    = biIn.checked;
+    const perPass  = parseFloat(maxPerPassIn.value);
+    const isLaser  = outputModeIn.value === 'laser';
+    const maxPower = parseFloat(maxPowerIn.value) || 1000;
+    const minPower = parseFloat(minPowerIn.value) || 0;
+    const minFiringS = Math.max(0, parseFloat(minFiringSIn.value) || 0);
+    const focalZ   = parseFloat(focalZIn.value) || 0;
+    const laserCmd = (laserModeIn.value === 'm3') ? 'M3' : 'M4';
+    const laserPasses = Math.max(1, parseInt(laserPassesIn.value) || 1);
+    // Convert internal depth (negative Z, 0..-maxDepth) to a laser S value
+    // (minPower..maxPower). Used only when isLaser is true.
+    const zToPower = (z) => {
+      if (z >= -1e-5) return minPower;
+      const t = Math.min(1, (-z) / Math.max(0.001, maxDepth));
+      return minPower + (maxPower - minPower) * t;
+    };
+
+    // Rotated scan geometry. The user-chosen cutting angle rotates the scan
+    // direction within the workpiece. At 0° scans are horizontal (along +X);
+    // at 90° they're vertical (along +Y); 45° gives diagonal hatching. The
+    // workpiece itself stays axis-aligned in machine coordinates — we just
+    // rotate the *pattern* over it.
+    const cuttingAngleDeg = parseFloat(cuttingAngleIn.value) || 0;
+    const angleRad = cuttingAngleDeg * Math.PI / 180;
+    const cosA = Math.cos(angleRad), sinA = Math.sin(angleRad);
+    let sMin = Infinity, sMax = -Infinity, pMin = Infinity, pMax = -Infinity;
+    for (const [cx, cy] of [[0,0], [widthMm,0], [0,heightMm], [widthMm,heightMm]]) {
+      const s =  cx*cosA + cy*sinA;
+      const p = -cx*sinA + cy*cosA;
+      if (s < sMin) sMin = s; if (s > sMax) sMax = s;
+      if (p < pMin) pMin = p; if (p > pMax) pMax = p;
+    }
+    const xResVal = parseFloat(xResIn.value);
+    const lineSpacing = lineSpacingMm();
+    const ds = 1 / xResVal;                                     // mm per sample along scan
+    const W = Math.max(1, Math.round((sMax - sMin) * xResVal)); // samples per scan line
+    const H = Math.max(1, Math.round((pMax - pMin) / lineSpacing)); // number of scan lines
+
+    const passDepths = [];
+    if (isLaser) {
+      // Laser: every pass uses the full intensity range; just repeat N times.
+      for (let i = 0; i < laserPasses; i++) passDepths.push(maxDepth);
+    } else if (!perPass || perPass <= 0) {
+      passDepths.push(maxDepth);
+    } else {
+      for (let d = perPass; d < maxDepth; d += perPass) passDepths.push(d);
+      passDepths.push(maxDepth);
+    }
+    const numPasses = passDepths.length;
+
+    const pixelZ = (v) => -maxDepth * (1 - v / 255);
+    const isWhite = (v) => v >= 254;
+
+    // Bilinear sample of the preview image at workpiece-mm coordinates.
+    // (Diagonal scan lines hit sub-pixel positions, so nearest-neighbour
+    // sampling would alias badly along the scan.)
+    const sampleBilinear = (xMm, yMm) => {
+      const fx = (xMm / widthMm) * Wp - 0.5;
+      const fy = (yMm / heightMm) * Hp - 0.5;
+      let xi = Math.floor(fx), yi = Math.floor(fy);
+      const tx = fx - xi, ty = fy - yi;
+      if (xi < 0) xi = 0; else if (xi > Wp - 2) xi = Wp - 2;
+      if (yi < 0) yi = 0; else if (yi > Hp - 2) yi = Hp - 2;
+      const v00 = data[(yi*Wp + xi)     * 4];
+      const v10 = data[(yi*Wp + xi + 1) * 4];
+      const v01 = data[((yi+1)*Wp + xi)     * 4];
+      const v11 = data[((yi+1)*Wp + xi + 1) * 4];
+      const va = v00 + (v10 - v00) * tx;
+      const vb = v01 + (v11 - v01) * tx;
+      return va + (vb - va) * ty;
+    };
+
+    // Outputs
+    const gcodeChunks = [];
+    const cutSegPos = [];
+    const cutSegCol = [];
+    const rapidPos  = [];
+
+    // Dialect-specific tweaks. Most CNC controllers accept the same core
+    // commands (G21/G90, G0/G1, M3/M4/M5, M30). The differences captured here:
+    //   - Marlin doesn't need G94 (feed/min is the default and unconfigurable
+    //     in firmware), and some Marlin builds reject G94.
+    //   - LinuxCNC traditionally ends with M2; M30 also works.
+    const dialect = (dialectIn.value || 'grbl');
+    const DIALECT_LABEL = {
+      generic: 'Generic G-code', grbl: 'GRBL / FluidNC',
+      marlin: 'Marlin', linuxcnc: 'LinuxCNC',
+    };
+    const useG94 = dialect !== 'marlin';
+    const endCmd = dialect === 'linuxcnc' ? 'M2' : 'M30';
+    const prologueText = (prologueIn.value || '').trim();
+    const epilogueText = (epilogueIn.value || '').trim();
+    const prologueBlock = prologueText
+      ? '; --- custom prologue ---\n' + prologueText + '\n; --- end prologue ---\n'
+      : '';
+    const epilogueBlock = epilogueText
+      ? '; --- custom epilogue ---\n' + epilogueText + '\n; --- end epilogue ---\n'
+      : '';
+
+    // Header
+    if (isLaser) {
+      gcodeChunks.push(
+        '; G-code generated by CNC Image Engraver — Laser mode\n' +
+        `; Target: ${DIALECT_LABEL[dialect]}\n` +
+        `; Date: ${new Date().toISOString()}\n` +
+        `; Engraving grid: ${W} samples × ${H} scan lines (source ${Wp} x ${Hp})\n` +
+        `; Workpiece: ${widthMm.toFixed(2)} x ${heightMm.toFixed(2)} mm\n` +
+        `; Beam kerf: ${parseFloat(bitDiamIn.value).toFixed(2)} mm\n` +
+        `; Line spacing: ${lineSpacing.toFixed(3)} mm\n` +
+        `; Cutting angle: ${cuttingAngleDeg.toFixed(1)}°\n` +
+        `; Power range: S${minPower.toFixed(0)} (white) .. S${maxPower.toFixed(0)} (black)\n` +
+        `; Passes: ${numPasses}\n` +
+        '\n' +
+        'G21        ; mm\n' +
+        'G90        ; absolute\n' +
+        (useG94 ? 'G94        ; feed/min\n' : '') +
+        prologueBlock +
+        (focalZ !== 0 ? `G0 Z${focalZ.toFixed(3)}\n` : '') +
+        `${laserCmd} S0     ; laser on (${laserCmd === 'M4' ? 'dynamic' : 'constant'} mode), off until S>0\n` +
+        'G0 X0.000 Y0.000\n\n'
+      );
+    } else {
+      gcodeChunks.push(
+        '; G-code generated by CNC Image Engraver\n' +
+        `; Target: ${DIALECT_LABEL[dialect]}\n` +
+        `; Date: ${new Date().toISOString()}\n` +
+        `; Engraving grid: ${W} samples × ${H} scan lines (source ${Wp} x ${Hp})\n` +
+        `; Workpiece: ${widthMm.toFixed(2)} x ${heightMm.toFixed(2)} mm\n` +
+        `; Bit: ${bitTypeIn.value} dia ${parseFloat(bitDiamIn.value).toFixed(2)} mm` +
+          (bitTypeIn.value === 'vbit' ? ` angle ${parseFloat(bitAngleIn.value).toFixed(0)}°` : '') + '\n' +
+        `; Line spacing: ${lineSpacing.toFixed(3)} mm\n` +
+        `; Cutting angle: ${cuttingAngleDeg.toFixed(1)}°\n` +
+        `; Z range: 0 (white) to -${maxDepth.toFixed(3)} (black)\n` +
+        `; Passes: ${numPasses} (depths: ${passDepths.map(d=>d.toFixed(2)).join(', ')})\n` +
+        '\n' +
+        'G21        ; mm\n' +
+        'G90        ; absolute\n' +
+        (useG94 ? 'G94        ; feed/min\n' : '') +
+        prologueBlock +
+        (spindle > 0 ? `M3 S${spindle}\n` : '') +
+        `G0 Z${zSafe.toFixed(3)}\n` +
+        'G0 X0.000 Y0.000\n\n'
+      );
+    }
+
+    let prevEnd = { x: 0, y: 0, z: isLaser ? 0 : zSafe };
+    const widthHalf = widthMm / 2;
+    const heightHalf = heightMm / 2;
+
+    // ----- Border frame (optional) -----
+    // Trace a rectangle around the engraving area BEFORE the main pass so the
+    // user can verify the engraving fits on the workpiece and is positioned
+    // correctly. Emitted at higher feed than the engraving feed; on CNC it's a
+    // shallow score (or dry-run at Z safe if depth=0); on laser it's a visible
+    // outline at user-chosen power. Added to toolpath visualization too.
+    if (frameEnableIn.checked) {
+      const m  = Math.max(0, parseFloat(frameMarginIn.value) || 0);
+      const fS = Math.max(1, parseFloat(frameSpeedIn.value) || feedRate);
+      const fD = Math.max(0, parseFloat(frameDepthIn.value) || 0);
+      const fP = Math.max(0, parseFloat(framePowerIn.value) || 0);
+      const twice = framePasses2In.checked;
+      const x0 = -m, y0 = -m;
+      const x1 = widthMm + m, y1 = heightMm + m;
+      // Path corners walked clockwise from the bottom-left.
+      const corners = [
+        [x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0],
+      ];
+
+      gcodeChunks.push('; ====== Border frame ======\n');
+
+      if (isLaser) {
+        // Move to start with laser off, then trace at frame power.
+        gcodeChunks.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)} S0\n`);
+        rapidPos.push(
+          prevEnd.x - widthHalf, 0, prevEnd.y - heightHalf,
+          x0 - widthHalf,        0, y0 - heightHalf,
+        );
+        prevEnd.x = x0; prevEnd.y = y0; prevEnd.z = 0;
+        const loops = twice ? 2 : 1;
+        for (let k = 0; k < loops; k++) {
+          for (let i = 1; i < corners.length; i++) {
+            const [cx, cy] = corners[i];
+            const [px, py] = corners[i-1];
+            const sStr = (i === 1 && k === 0) ? ` S${Math.round(fP)} F${fS}` : '';
+            gcodeChunks.push(`G1 X${cx.toFixed(3)} Y${cy.toFixed(3)}${sStr}\n`);
+            // Visualize as a cut segment near the surface
+            cutSegPos.push(
+              px - widthHalf, 0, py - heightHalf,
+              cx - widthHalf, 0, cy - heightHalf,
+            );
+            cutSegCol.push(1.0, 0.55, 0.2, 1.0, 0.55, 0.2); // amber for frame
+          }
+        }
+        gcodeChunks.push('S0          ; laser off after frame\n');
+        prevEnd.x = x0; prevEnd.y = y0;
+      } else {
+        // CNC: retract, position, plunge to frameDepth (negative), trace.
+        gcodeChunks.push(`G0 Z${zSafe.toFixed(3)}\n`);
+        gcodeChunks.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}\n`);
+        rapidPos.push(
+          prevEnd.x - widthHalf, prevEnd.z, prevEnd.y - heightHalf,
+          prevEnd.x - widthHalf, zSafe,     prevEnd.y - heightHalf,
+          prevEnd.x - widthHalf, zSafe,     prevEnd.y - heightHalf,
+          x0 - widthHalf,        zSafe,     y0 - heightHalf,
+        );
+        const z = -fD;
+        if (fD > 0) {
+          gcodeChunks.push(`G1 Z${z.toFixed(3)} F${plunge}\n`);
+          cutSegPos.push(
+            x0 - widthHalf, zSafe, y0 - heightHalf,
+            x0 - widthHalf, z,     y0 - heightHalf,
+          );
+          cutSegCol.push(0.4, 0.9, 1.0, 1.0, 0.55, 0.2);
+        }
+        const loops = twice ? 2 : 1;
+        for (let k = 0; k < loops; k++) {
+          for (let i = 1; i < corners.length; i++) {
+            const [cx, cy] = corners[i];
+            const [px, py] = corners[i-1];
+            const fStr = (i === 1 && k === 0) ? ` F${fS}` : '';
+            gcodeChunks.push(`G1 X${cx.toFixed(3)} Y${cy.toFixed(3)}${fStr}\n`);
+            cutSegPos.push(
+              px - widthHalf, z, py - heightHalf,
+              cx - widthHalf, z, cy - heightHalf,
+            );
+            cutSegCol.push(1.0, 0.55, 0.2, 1.0, 0.55, 0.2);
+          }
+        }
+        gcodeChunks.push(`G0 Z${zSafe.toFixed(3)}\n`);
+        rapidPos.push(
+          x0 - widthHalf, z,     y0 - heightHalf,
+          x0 - widthHalf, zSafe, y0 - heightHalf,
+        );
+        prevEnd.x = x0; prevEnd.y = y0; prevEnd.z = zSafe;
+      }
+      gcodeChunks.push('; ====== End border ======\n\n');
+    }
+
+    const totalRows = numPasses * H;
+    let rowsDone = 0;
+
+    for (let pass = 0; pass < numPasses; pass++) {
+      const pd = passDepths[pass];
+      const passZmin = -pd; // most negative cut allowed in this pass
+
+      gcodeChunks.push(`; ====== Pass ${pass+1}/${numPasses}  max depth ${pd.toFixed(3)} mm ======\n`);
+
+      // Per-row buffer for this pass
+      let rowChunks = [];
+
+      // Reused per-line scratch buffers
+      const zArr   = new Float64Array(W);
+      const xArr   = new Float64Array(W);
+      const yArr   = new Float64Array(W);
+      const cutArr = new Uint8Array(W);
+
+      // Emit one contiguous cut run along the current scan line. Each sample
+      // has its own (x,y); we emit both modally (only when changed). Z is
+      // collapsed across constant-Z subruns. F-rate is modal within the run.
+      function emitCutRun(rowParts, runStart, runEnd, dir) {
+        const x0 = xArr[runStart], y0 = yArr[runStart], z0 = zArr[runStart];
+
+        if (isLaser) {
+          // ----- LASER PATH -----
+          // Rapid to start with laser off (G0 implicitly extinguishes M4
+          // dynamic laser since there's no controlled-feed motion).
+          if (Math.abs(prevEnd.x - x0) > 1e-5 || Math.abs(prevEnd.y - y0) > 1e-5) {
+            rowParts.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)} S0\n`);
+            rapidPos.push(
+              prevEnd.x - widthHalf, 0, prevEnd.y - heightHalf,
+              x0        - widthHalf, 0, y0        - heightHalf,
+            );
+            prevEnd.x = x0; prevEnd.y = y0;
+          }
+
+          let curS = -1; // forces an S emission on first move
+          let lastX = x0, lastY = y0;
+          let feedSet = false;
+
+          const emitG1L = (xVal, yVal, sVal /* required for cut, optional for modal */) => {
+            const xDiff = Math.abs(xVal - lastX) > 1e-4;
+            const yDiff = Math.abs(yVal - lastY) > 1e-4;
+            const sDiff = (sVal !== undefined) && Math.abs(sVal - curS) > 0.5;
+            if (!(xDiff || yDiff || sDiff)) return;
+            const fStr = feedSet ? '' : ` F${feedRate}`;
+            const xPart = xDiff ? ` X${xVal.toFixed(3)}` : '';
+            const yPart = yDiff ? ` Y${yVal.toFixed(3)}` : '';
+            const sPart = sDiff ? ` S${Math.round(sVal)}` : '';
+            rowParts.push(`G1${xPart}${yPart}${sPart}${fStr}\n`);
+            // Visualization: use the *depth* analog so the 3D toolpath shows
+            // power as colored line intensity, consistent with CNC mode.
+            const toZ = (sVal !== undefined) ? -maxDepth * ((sVal - minPower) / Math.max(1, maxPower - minPower)) : -maxDepth * ((curS - minPower) / Math.max(1, maxPower - minPower));
+            const fromZ = -maxDepth * ((curS - minPower) / Math.max(1, maxPower - minPower));
+            cutSegPos.push(
+              lastX - widthHalf, fromZ, lastY - heightHalf,
+              xVal  - widthHalf, toZ,   yVal  - heightHalf,
+            );
+            const cF = depthRGB(Math.max(0, -fromZ) / Math.max(0.001, maxDepth));
+            const cT = depthRGB(Math.max(0, -toZ)   / Math.max(0.001, maxDepth));
+            cutSegCol.push(cF[0], cF[1], cF[2], cT[0], cT[1], cT[2]);
+            lastX = xVal; lastY = yVal;
+            if (sDiff) curS = sVal;
+            feedSet = true;
+          };
+
+          // Walk run pixels — same constant-value compression as CNC but on S
+          for (let j = runStart + dir; j !== runEnd + dir; j += dir) {
+            const sj = zToPower(zArr[j]);
+            if (Math.abs(sj - curS) > 0.5) {
+              const prevJ = j - dir;
+              const closeX = xArr[prevJ], closeY = yArr[prevJ];
+              if (Math.abs(closeX - lastX) > 1e-5 || Math.abs(closeY - lastY) > 1e-5) {
+                emitG1L(closeX, closeY);
+              }
+              emitG1L(xArr[j], yArr[j], sj);
+            }
+          }
+          const endX = xArr[runEnd], endY = yArr[runEnd];
+          if (Math.abs(endX - lastX) > 1e-5 || Math.abs(endY - lastY) > 1e-5) {
+            emitG1L(endX, endY);
+          }
+
+          prevEnd.x = endX; prevEnd.y = endY; prevEnd.z = zArr[runEnd];
+          return;
+        }
+
+        // ----- CNC PATH -----
+        if (prevEnd.z < zSafe - 1e-5) {
+          rowParts.push(`G0 Z${zSafe.toFixed(3)}\n`);
+          rapidPos.push(
+            prevEnd.x - widthHalf, prevEnd.z, prevEnd.y - heightHalf,
+            prevEnd.x - widthHalf, zSafe,     prevEnd.y - heightHalf,
+          );
+          prevEnd.z = zSafe;
+        }
+        if (Math.abs(prevEnd.x - x0) > 1e-5 || Math.abs(prevEnd.y - y0) > 1e-5) {
+          rowParts.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}\n`);
+          rapidPos.push(
+            prevEnd.x - widthHalf, zSafe, prevEnd.y - heightHalf,
+            x0        - widthHalf, zSafe, y0        - heightHalf,
+          );
+          prevEnd.x = x0; prevEnd.y = y0;
+        }
+        rowParts.push(`G1 Z${z0.toFixed(3)} F${plunge}\n`);
+        cutSegPos.push(
+          x0 - widthHalf, zSafe, y0 - heightHalf,
+          x0 - widthHalf, z0,    y0 - heightHalf,
+        );
+        {
+          const ce = depthRGB(Math.max(0, -z0) / Math.max(0.001, maxDepth));
+          cutSegCol.push(0.4, 0.9, 1.0, ce[0], ce[1], ce[2]);
+        }
+        prevEnd.z = z0;
+
+        let curZ = z0;
+        let lastX = x0, lastY = y0;
+        let feedSet = false;
+
+        const emitG1 = (xVal, yVal, zVal /* optional */) => {
+          const xDiff = Math.abs(xVal - lastX) > 1e-4;
+          const yDiff = Math.abs(yVal - lastY) > 1e-4;
+          const zDiff = (zVal !== undefined);
+          if (!(xDiff || yDiff || zDiff)) return;
+          const fStr = feedSet ? '' : ` F${feedRate}`;
+          const xPart = xDiff ? ` X${xVal.toFixed(3)}` : '';
+          const yPart = yDiff ? ` Y${yVal.toFixed(3)}` : '';
+          const zPart = zDiff ? ` Z${zVal.toFixed(3)}` : '';
+          rowParts.push(`G1${xPart}${yPart}${zPart}${fStr}\n`);
+          const toZ = zDiff ? zVal : curZ;
+          cutSegPos.push(
+            lastX - widthHalf, curZ, lastY - heightHalf,
+            xVal  - widthHalf, toZ,  yVal  - heightHalf,
+          );
+          const cF = depthRGB(Math.max(0, -curZ) / Math.max(0.001, maxDepth));
+          const cT = depthRGB(Math.max(0, -toZ)  / Math.max(0.001, maxDepth));
+          cutSegCol.push(cF[0], cF[1], cF[2], cT[0], cT[1], cT[2]);
+          lastX = xVal; lastY = yVal;
+          if (zDiff) curZ = zVal;
+          feedSet = true;
+        };
+
+        for (let j = runStart + dir; j !== runEnd + dir; j += dir) {
+          if (Math.abs(zArr[j] - curZ) > 1e-4) {
+            const prevJ = j - dir;
+            const closeX = xArr[prevJ], closeY = yArr[prevJ];
+            if (Math.abs(closeX - lastX) > 1e-5 || Math.abs(closeY - lastY) > 1e-5) {
+              emitG1(closeX, closeY);
+            }
+            emitG1(xArr[j], yArr[j], zArr[j]);
+          }
+        }
+        const endX = xArr[runEnd], endY = yArr[runEnd];
+        if (Math.abs(endX - lastX) > 1e-5 || Math.abs(endY - lastY) > 1e-5) {
+          emitG1(endX, endY);
+        }
+
+        prevEnd.x = endX; prevEnd.y = endY; prevEnd.z = curZ;
+      }
+
+      for (let li = 0; li < H; li++) {
+        const perpD = pMin + (li + 0.5) * lineSpacing;
+        const leftToRight = bidir ? ((li + pass) % 2 === 0) : true;
+
+        // Sample the scan line at xRes intervals. Samples falling outside the
+        // workpiece are flagged as non-cut so the run-length walker treats
+        // them like white pixels.
+        for (let i = 0; i < W; i++) {
+          const scanT = sMin + (i + 0.5) * ds;
+          const xW = scanT * cosA - perpD * sinA;
+          const yW = scanT * sinA + perpD * cosA;
+          xArr[i] = xW; yArr[i] = yW;
+          if (xW < 0 || xW > widthMm || yW < 0 || yW > heightMm) {
+            zArr[i] = 0; cutArr[i] = 0;
+            continue;
+          }
+          const v = sampleBilinear(xW, yW);
+          let z = pixelZ(v);
+          if (z < passZmin) z = passZmin;
+          let isCutP = z < -1e-5 ? 1 : 0;
+          if (skipWhite && isWhite(v)) { z = 0; isCutP = 0; }
+          // Laser firing-threshold: pixels whose computed S would be below
+          // the laser's reliable-firing threshold are treated as skip (no
+          // mark), so faint pixels don't get marginal/inconsistent burns.
+          if (isLaser && isCutP && minFiringS > 0) {
+            if (zToPower(z) < minFiringS) { z = 0; isCutP = 0; }
+          }
+          zArr[i] = z;
+          cutArr[i] = isCutP;
+        }
+
+        rowsDone++;
+
+        const dir = leftToRight ? 1 : -1;
+        let i = leftToRight ? 0 : W - 1;
+        const endIdx = leftToRight ? W : -1;
+        const rowParts = [];
+        while (i !== endIdx) {
+          while (i !== endIdx && !cutArr[i]) i += dir;
+          if (i === endIdx) break;
+          const runStart = i;
+          while (i !== endIdx && cutArr[i]) i += dir;
+          const runEnd = i - dir;
+          emitCutRun(rowParts, runStart, runEnd, dir);
+        }
+        if (rowParts.length) rowChunks.push(rowParts.join(''));
+
+        if ((li & 15) === 0) {
+          setProgress((rowsDone / totalRows) * 90, `Generating pass ${pass+1}/${numPasses} — line ${li+1}/${H}`);
+          if (rowChunks.length >= 64) {
+            gcodeChunks.push(rowChunks.join(''));
+            rowChunks = [];
+          }
+          await yieldUI();
+        }
+      }
+      if (rowChunks.length) gcodeChunks.push(rowChunks.join(''));
+    }
+
+    // Footer
+    if (isLaser) {
+      gcodeChunks.push(
+        '\n' +
+        'S0          ; laser off\n' +
+        'G0 X0.000 Y0.000\n' +
+        'M5\n' +
+        epilogueBlock +
+        endCmd + '\n'
+      );
+      rapidPos.push(
+        prevEnd.x - widthHalf, 0, prevEnd.y - heightHalf,
+        -widthHalf,            0, -heightHalf
+      );
+    } else {
+      gcodeChunks.push(
+        '\n' +
+        `G0 Z${zSafe.toFixed(3)}\n` +
+        'G0 X0.000 Y0.000\n' +
+        (spindle > 0 ? 'M5\n' : '') +
+        epilogueBlock +
+        endCmd + '\n'
+      );
+      rapidPos.push(
+        prevEnd.x - widthHalf, prevEnd.z, prevEnd.y - heightHalf,
+        prevEnd.x - widthHalf, zSafe,    prevEnd.y - heightHalf,
+        prevEnd.x - widthHalf, zSafe,    prevEnd.y - heightHalf,
+        -widthHalf,             zSafe,    -heightHalf
+      );
+    }
+
+    setProgress(91, 'Packaging G-code...');
+    await yieldUI();
+
+    // Optional compact-output post-pass: drop trailing zeros from decimals
+    // and remove inter-token spaces. Keeps comments intact. Typical savings
+    // 15-25% — meaningful on long raster files for memory-constrained
+    // controllers and slower serial links.
+    if (compactGcodeIn.checked) {
+      setProgress(93, 'Compacting G-code...');
+      for (let i = 0; i < gcodeChunks.length; i++) {
+        gcodeChunks[i] = minifyGcodeChunk(gcodeChunks[i]);
+      }
+      await yieldUI();
+    }
+
+    gcodeBlob = new Blob(gcodeChunks, { type: 'text/plain' });
+
+    // Build a small preview from the first chunk only — never inject megabytes
+    // into a textarea.
+    setProgress(95, 'Building preview...');
+    await yieldUI();
+    const previewText = await buildPreview(gcodeChunks);
+    gcodeOut.value = previewText;
+    const totalSize = gcodeBlob.size;
+    // Count lines by walking chunks — avoids a big intermediate split() on
+    // the full text.
+    let lineCount = 0;
+    for (const c of gcodeChunks) {
+      for (let k = 0; k < c.length; k++) if (c.charCodeAt(k) === 10) lineCount++;
+    }
+    // Estimate machining time by summing distances in the toolpath segments.
+    // Vertical-only G1 segments (dx≈dz≈0, dy≠0 in three.js coords, i.e. pure
+    // Z motion) are plunges and use plungeRate; everything else uses feed.
+    // Rapid segments use the user-configured rapid (G0) rate.
+    const rapidRate = Math.max(1, parseFloat(rapidRateIn.value) || 3000);
+    let cutMm = 0, plungeMm = 0, rapidMm = 0;
+    for (let i = 0; i < cutSegPos.length; i += 6) {
+      const dx = cutSegPos[i+3] - cutSegPos[i];
+      const dy = cutSegPos[i+4] - cutSegPos[i+1];
+      const dz = cutSegPos[i+5] - cutSegPos[i+2];
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      const isVertical = Math.abs(dx) < 1e-5 && Math.abs(dz) < 1e-5 && Math.abs(dy) > 1e-5;
+      if (isVertical) plungeMm += dist; else cutMm += dist;
+    }
+    for (let i = 0; i < rapidPos.length; i += 6) {
+      const dx = rapidPos[i+3] - rapidPos[i];
+      const dy = rapidPos[i+4] - rapidPos[i+1];
+      const dz = rapidPos[i+5] - rapidPos[i+2];
+      rapidMm += Math.sqrt(dx*dx + dy*dy + dz*dz);
+    }
+    // Laser: plunge segments in the visualization don't correspond to real
+    // physical motion (the "depth" is conceptual), so don't count plunge time.
+    const cutMin    = cutMm    / Math.max(1, feedRate);
+    const plungeMin = isLaser ? 0 : plungeMm / Math.max(1, plunge);
+    const rapidMin  = rapidMm  / rapidRate;
+    const totalMin  = cutMin + plungeMin + rapidMin;
+
+    gcodeStats.textContent =
+      `~${formatJobTime(totalMin)} · ${lineCount.toLocaleString()} lines · ${(totalSize / 1024).toFixed(1)} KB · ${numPasses} pass${numPasses>1?'es':''}`;
+
+    setProgress(97, 'Building 3D toolpath...');
+    await yieldUI();
+    threeView.updateToolpathFromArrays(cutSegPos, cutSegCol, rapidPos);
+    $('showToolpath').checked = true;
+    threeView.setToolpathVisible(true);
+
+    setProgress(100, 'Ready');
+    downloadBtn.disabled = false;
+  } catch (err) {
+    console.error(err);
+    setProgress(0, 'Error: ' + err.message);
+  } finally {
+    generating = false;
+    generateBtn.disabled = false;
+  }
+}
+
+async function buildPreview(chunks) {
+  const HEAD_LINES = 200;
+  const TAIL_LINES = 40;
+  const head = [];
+  let headCount = 0;
+  // Take head lines
+  outer: for (const c of chunks) {
+    let start = 0;
+    for (let i = 0; i < c.length; i++) {
+      if (c.charCodeAt(i) === 10) {
+        head.push(c.slice(start, i + 1));
+        headCount++;
+        start = i + 1;
+        if (headCount >= HEAD_LINES) break outer;
+      }
+    }
+    if (headCount >= HEAD_LINES) break;
+  }
+  // Take tail lines — walk from end backwards
+  const tailLines = [];
+  let needed = TAIL_LINES;
+  for (let ci = chunks.length - 1; ci >= 0 && needed > 0; ci--) {
+    const c = chunks[ci];
+    let end = c.length;
+    for (let i = c.length - 1; i >= 0 && needed > 0; i--) {
+      if (c.charCodeAt(i) === 10) {
+        if (end !== c.length || i !== c.length - 1) {
+          tailLines.unshift(c.slice(i + 1, end));
+          needed--;
+        }
+        end = i + 1;
+      }
+    }
+    if (end > 0 && needed > 0) {
+      tailLines.unshift(c.slice(0, end));
+      needed--;
+    }
+  }
+  return head.join('') +
+    `\n; ... (truncated preview — full G-code is in the download) ...\n\n` +
+    tailLines.join('');
+}
+
+function depthRGB(t) {
+  // surface (cyan-ish) → deepest (orange-red)
+  const a = [0.42, 0.94, 0.82];
+  const b = [1.0, 0.54, 0.24];
+  return [
+    a[0] + (b[0]-a[0]) * t,
+    a[1] + (b[1]-a[1]) * t,
+    a[2] + (b[2]-a[2]) * t,
+  ];
+}
+
+// ---------- Buttons ----------
+generateBtn.addEventListener('click', generateAll);
+
+downloadBtn.addEventListener('click', () => {
+  if (!gcodeBlob) return;
+  const url = URL.createObjectURL(gcodeBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'engraving.gcode';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Defer revoke so the download has a chance to start (Firefox/Chrome both
+  // need this; immediate revoke can abort the transfer for large files).
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+});
+
+// ---------- Tabs ----------
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const which = t.dataset.tab;
+    $('pane' + which).classList.add('active');
+    $('tools3d').style.display = which === '3d' ? 'flex' : 'none';
+    if (which === '3d')   threeView.onShow();
+    if (which === 'final') finalView.onShow();
+  });
+});
+
+// ---------- Procedural wood textures ----------
+// We generate wood-grain textures on a canvas — no network dependency, no CORS,
+// works offline. Parameters are tuned to roughly match common reference photos
+// for each species. Results are cached per (type, size).
+const WOODS = {
+  oak:      { base: [218, 174, 117], dark: [125,  82,  44], freq: 0.7,  contrast: 1.6, warp: 28, pores: 0.35, knots: 0.15 },
+  walnut:   { base: [120,  82,  52], dark: [ 55,  32,  20], freq: 0.55, contrast: 1.4, warp: 32, pores: 0.20, knots: 0.20 },
+  pine:     { base: [238, 210, 160], dark: [180, 130,  80], freq: 0.55, contrast: 1.2, warp: 22, pores: 0.10, knots: 0.45 },
+  cherry:   { base: [184, 110,  78], dark: [108,  58,  40], freq: 0.6,  contrast: 1.5, warp: 24, pores: 0.15, knots: 0.10 },
+  maple:    { base: [236, 215, 175], dark: [200, 170, 130], freq: 0.55, contrast: 0.7, warp: 18, pores: 0.05, knots: 0.05 },
+  mahogany: { base: [140,  70,  50], dark: [ 80,  38,  25], freq: 0.55, contrast: 1.3, warp: 26, pores: 0.18, knots: 0.10 },
+  birch:    { base: [240, 220, 188], dark: [205, 178, 142], freq: 0.5,  contrast: 0.6, warp: 16, pores: 0.05, knots: 0.20 },
+};
+
+// Tiny seeded value-noise. Good enough for wood textures.
+const NOISE_PERM = (() => {
+  const p = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) p[i] = i;
+  let seed = 1337;
+  for (let i = 255; i > 0; i--) {
+    seed = (seed * 9301 + 49297) % 233280;
+    const j = Math.floor((seed / 233280) * (i + 1));
+    const t = p[i]; p[i] = p[j]; p[j] = t;
+  }
+  const out = new Uint8Array(512);
+  for (let i = 0; i < 512; i++) out[i] = p[i & 255];
+  return out;
+})();
+function fade(t) { return t*t*t*(t*(t*6 - 15) + 10); }
+function vlerp(a, b, t) { return a + (b - a) * t; }
+function vnoise2(x, y) {
+  const xi = Math.floor(x) & 255;
+  const yi = Math.floor(y) & 255;
+  const xf = x - Math.floor(x);
+  const yf = y - Math.floor(y);
+  const u = fade(xf), v = fade(yf);
+  const aa = NOISE_PERM[NOISE_PERM[xi] + yi] / 255;
+  const ab = NOISE_PERM[NOISE_PERM[xi] + yi + 1] / 255;
+  const ba = NOISE_PERM[NOISE_PERM[xi + 1] + yi] / 255;
+  const bb = NOISE_PERM[NOISE_PERM[xi + 1] + yi + 1] / 255;
+  return vlerp(vlerp(aa, ba, u), vlerp(ab, bb, u), v);
+}
+function fbm(x, y) {
+  let v = 0, a = 0.5, fx = x, fy = y;
+  for (let i = 0; i < 4; i++) { v += a * vnoise2(fx, fy); fx *= 2; fy *= 2; a *= 0.5; }
+  return v;
+}
+
+const woodTextureCache = new Map();
+function makeWoodCanvas(type, size = 512) {
+  const key = `${type}:${size}`;
+  if (woodTextureCache.has(key)) return woodTextureCache.get(key);
+  const P = WOODS[type] || WOODS.oak;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const n = fbm(x * 0.012, y * 0.012);          // large warping noise
+      const fine = fbm(x * 0.08, y * 0.08) * 0.5;   // mid detail
+      // Grain runs along Y; perturb the X coordinate by noise to get wavy rings
+      const gx = x + (n - 0.5) * P.warp;
+      const ring = Math.abs(Math.sin(gx * P.freq * 0.06));
+      const grain = Math.pow(ring, P.contrast);
+      // Pores (small dark specks aligned with grain)
+      let pores = 0;
+      if (P.pores > 0) {
+        const ps = vnoise2(x * 0.5, y * 0.05);
+        if (ps > 1 - P.pores * 0.12) pores = (ps - (1 - P.pores * 0.12)) * 8;
+      }
+      // Knots (occasional dark blobs)
+      let knot = 0;
+      if (P.knots > 0) {
+        const kn = fbm(x * 0.005, y * 0.005);
+        if (kn > 0.78) knot = (kn - 0.78) * 4 * P.knots;
+      }
+      let mix = grain * 0.55 + fine * 0.25 + (n - 0.5) * 0.2 + pores + knot;
+      if (mix < 0) mix = 0; else if (mix > 1) mix = 1;
+      const r = vlerp(P.base[0], P.dark[0], mix);
+      const g = vlerp(P.base[1], P.dark[1], mix);
+      const b = vlerp(P.base[2], P.dark[2], mix);
+      const i = (y * size + x) * 4;
+      d[i] = r; d[i+1] = g; d[i+2] = b; d[i+3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  woodTextureCache.set(key, canvas);
+  return canvas;
+}
+
+// Material definitions. `engrave` is the linear RGB the engraved areas should
+// become (0..1 each channel — values >1 are OK for HDR-ish brightening like
+// "anodized aluminum laser-exposed silver"). `roughness` / `metalness` are PBR
+// inputs for the Three.js material. `kind` selects the procedural texture
+// generator below.
+const MATERIAL_DEFS = {
+  oak:           { kind: 'wood', engrave: [0.50, 0.32, 0.18], roughness: 0.85, metalness: 0,    base: [218, 174, 117] },
+  walnut:        { kind: 'wood', engrave: [0.40, 0.25, 0.15], roughness: 0.85, metalness: 0,    base: [120,  82,  52] },
+  pine:          { kind: 'wood', engrave: [0.40, 0.25, 0.12], roughness: 0.85, metalness: 0,    base: [238, 210, 160] },
+  cherry:        { kind: 'wood', engrave: [0.42, 0.26, 0.16], roughness: 0.85, metalness: 0,    base: [184, 110,  78] },
+  maple:         { kind: 'wood', engrave: [0.55, 0.40, 0.20], roughness: 0.85, metalness: 0,    base: [236, 215, 175] },
+  mahogany:      { kind: 'wood', engrave: [0.35, 0.20, 0.10], roughness: 0.85, metalness: 0,    base: [140,  70,  50] },
+  birch:         { kind: 'wood', engrave: [0.50, 0.36, 0.22], roughness: 0.85, metalness: 0,    base: [240, 220, 188] },
+  mdf:           { kind: 'mdf',  engrave: [0.30, 0.20, 0.10], roughness: 0.90, metalness: 0,    base: [205, 175, 135] },
+  plywood_birch: { kind: 'wood', engrave: [0.45, 0.32, 0.20], roughness: 0.85, metalness: 0,    base: [225, 200, 165] },
+
+  acrylic_black: { kind: 'plastic', engrave: [0.92, 0.92, 0.95], roughness: 0.20, metalness: 0, base: [22, 22, 26] },
+  acrylic_white: { kind: 'plastic', engrave: [0.78, 0.78, 0.80], roughness: 0.30, metalness: 0, base: [240, 240, 240] },
+  acrylic_clear: { kind: 'plastic', engrave: [0.95, 0.97, 1.00], roughness: 0.15, metalness: 0, base: [195, 220, 232] },
+
+  brass:         { kind: 'metal', engrave: [0.40, 0.28, 0.12], roughness: 0.35, metalness: 0.85, base: [205, 168,  80] },
+  stainless:     { kind: 'metal', engrave: [0.40, 0.40, 0.42], roughness: 0.28, metalness: 0.90, base: [205, 205, 210] },
+
+  anodized_black: { kind: 'anodized', engrave: [0.72, 0.72, 0.75], roughness: 0.40, metalness: 0.65, base: [32, 32, 38] },
+  anodized_red:   { kind: 'anodized', engrave: [0.72, 0.72, 0.75], roughness: 0.40, metalness: 0.65, base: [142, 28, 28] },
+  anodized_blue:  { kind: 'anodized', engrave: [0.72, 0.72, 0.75], roughness: 0.40, metalness: 0.65, base: [28,  60, 140] },
+
+  mirror:        { kind: 'mirror',  engrave: [0.85, 0.87, 0.92], roughness: 0.05, metalness: 0.95, base: [225, 230, 240] },
+  glass:         { kind: 'glass',   engrave: [0.95, 0.98, 1.00], roughness: 0.12, metalness: 0.10, base: [228, 240, 248] },
+  leather:       { kind: 'leather', engrave: [0.18, 0.10, 0.05], roughness: 0.90, metalness: 0,    base: [125,  78,  45] },
+  slate:         { kind: 'stone',   engrave: [0.82, 0.82, 0.84], roughness: 0.75, metalness: 0,    base: [50,  50,  56] },
+  cork:          { kind: 'cork',    engrave: [0.40, 0.25, 0.15], roughness: 0.90, metalness: 0,    base: [195, 155, 100] },
+  cardboard:     { kind: 'paper',   engrave: [0.38, 0.25, 0.15], roughness: 0.95, metalness: 0,    base: [205, 175, 130] },
+};
+
+// Generic per-pixel texture generators. Each writes RGB into the canvas.
+function fillCanvas(size, fillFn) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const d = img.data;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const rgb = fillFn(x, y);
+      d[i] = rgb[0]; d[i+1] = rgb[1]; d[i+2] = rgb[2]; d[i+3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+function makeSolidNoiseCanvas(base, noiseAmt, size) {
+  return fillCanvas(size, (x, y) => {
+    const n = (fbm(x * 0.04, y * 0.04) - 0.5) * 2; // ~[-1, 1]
+    const k = 1 + n * noiseAmt;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makeBrushedCanvas(base, brushAmt, size, noise = 0.03) {
+  // Horizontal brushed-metal lines via high-frequency Y modulation
+  return fillCanvas(size, (x, y) => {
+    const stripe = Math.sin(y * 3.1 + fbm(x*0.02, y*0.02) * 3) * 0.5 + 0.5;
+    const n = (vnoise2(x * 0.4, y * 0.05) - 0.5) * noise * 2;
+    const k = 1 - brushAmt * 0.07 + stripe * brushAmt * 0.14 + n;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makeLeatherCanvas(base, size) {
+  return fillCanvas(size, (x, y) => {
+    // Pebbled organic surface from layered noise
+    const n1 = fbm(x * 0.06, y * 0.06);
+    const n2 = vnoise2(x * 0.25, y * 0.25);
+    const n3 = vnoise2(x * 0.8, y * 0.8);
+    const k = 0.75 + n1 * 0.25 + n2 * 0.15 - n3 * 0.08;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makeStoneCanvas(base, size) {
+  return fillCanvas(size, (x, y) => {
+    const n1 = fbm(x * 0.03, y * 0.03);
+    const n2 = fbm(x * 0.18, y * 0.18);
+    const k = 0.7 + n1 * 0.45 + n2 * 0.15;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makeCorkCanvas(base, size) {
+  // Tan with small darker holes
+  return fillCanvas(size, (x, y) => {
+    const n = fbm(x * 0.04, y * 0.04);
+    const spot = vnoise2(x * 0.5, y * 0.5);
+    let k = 0.85 + n * 0.18;
+    if (spot > 0.78) k *= 0.55; // dark hole
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makePaperCanvas(base, size) {
+  // Fibrous, lightly directional
+  return fillCanvas(size, (x, y) => {
+    const fiber = (vnoise2(x * 0.6, y * 0.05) - 0.5) * 0.12;
+    const blot  = (fbm(x * 0.03, y * 0.03) - 0.5) * 0.10;
+    const k = 1 + fiber + blot;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+function makeMdfCanvas(base, size) {
+  // Very fine, uniform grain — pressed wood fibers
+  return fillCanvas(size, (x, y) => {
+    const f = (vnoise2(x * 1.0, y * 1.0) - 0.5) * 0.08;
+    const b = (fbm(x * 0.05, y * 0.05) - 0.5) * 0.06;
+    const k = 1 + f + b;
+    return [base[0]*k, base[1]*k, base[2]*k];
+  });
+}
+
+function makeMaterialCanvas(key, size = 512) {
+  const cached = woodTextureCache.get(`${key}:${size}`);
+  if (cached) return cached;
+  const M = MATERIAL_DEFS[key] || MATERIAL_DEFS.oak;
+  let c;
+  switch (M.kind) {
+    case 'wood':     c = makeWoodCanvas(key, size); break;
+    case 'mdf':      c = makeMdfCanvas(M.base, size); break;
+    case 'plastic':  c = makeSolidNoiseCanvas(M.base, 0.04, size); break;
+    case 'mirror':   c = makeSolidNoiseCanvas(M.base, 0.015, size); break;
+    case 'glass':    c = makeSolidNoiseCanvas(M.base, 0.03, size); break;
+    case 'metal':    c = makeBrushedCanvas(M.base, 0.7, size); break;
+    case 'anodized': c = makeBrushedCanvas(M.base, 0.25, size, 0.05); break;
+    case 'leather':  c = makeLeatherCanvas(M.base, size); break;
+    case 'stone':    c = makeStoneCanvas(M.base, size); break;
+    case 'cork':     c = makeCorkCanvas(M.base, size); break;
+    case 'paper':    c = makePaperCanvas(M.base, size); break;
+    default:         c = makeSolidNoiseCanvas(M.base, 0.05, size);
+  }
+  // Reuse the wood cache for all materials (it's just a Map keyed by string)
+  woodTextureCache.set(`${key}:${size}`, c);
+  return c;
+}
+
+function currentMaterialKey() { return $('woodType').value || 'pine'; }
+function currentMaterialDef() { return MATERIAL_DEFS[currentMaterialKey()] || MATERIAL_DEFS.oak; }
+function currentWoodType() { return currentMaterialKey(); } // back-compat alias
+function currentGrainScale() { return parseFloat($('grainScale').value) || 80; }
+
+// ---------- Engraving simulation (shared by both 3D views) ----------
+// For each rendered surface point we compute the deepest cut produced by any
+// nearby scan line, accounting for the bit's cross-section profile. This makes
+// the 3D and Final Render previews show the *actual* engraved surface — with
+// rotated scan grooves, V-shaped valleys for V-bits, rounded valleys for ball
+// bits, and flat-bottom valleys for flat end mills — instead of just the
+// rectangular image-depth approximation.
+
+function meshResolution() {
+  // Pick a heightmap mesh resolution that resolves the scan grooves. We aim
+  // for ~2.5 vertices per line-spacing so grooves are visible, capped to keep
+  // the WebGL buffers reasonable.
+  const widthMm  = parseFloat(widthMmIn.value);
+  const heightMm = parseFloat(heightMmIn.value);
+  const ls = lineSpacingMm();
+  const perMm = Math.max(2, 2.5 / ls);
+  const MAX_DIM = 420;
+  const cols = Math.max(2, Math.min(MAX_DIM, Math.ceil(widthMm * perMm)));
+  const rows = Math.max(2, Math.min(MAX_DIM, Math.ceil(heightMm * perMm)));
+  return { cols, rows };
+}
+
+function buildSimContext() {
+  const isLaser  = outputModeIn.value === 'laser';
+  const widthMm  = parseFloat(widthMmIn.value);
+  const heightMm = parseFloat(heightMmIn.value);
+  // For laser, use a nominal "max intensity" of 1 mm purely as the
+  // normalization for color modulation. The Y axis won't be displaced.
+  const maxDepth = isLaser ? 1 : parseFloat(maxDepthIn.value);
+  const angRad   = (parseFloat(cuttingAngleIn.value) || 0) * Math.PI / 180;
+  const cosA = Math.cos(angRad), sinA = Math.sin(angRad);
+  const lineSpacing = lineSpacingMm();
+
+  let pMin = Infinity, pMax = -Infinity;
+  for (const [cx, cy] of [[0,0], [widthMm,0], [0,heightMm], [widthMm,heightMm]]) {
+    const p = -cx*sinA + cy*cosA;
+    if (p < pMin) pMin = p; if (p > pMax) pMax = p;
+  }
+  const numLines = Math.max(1, Math.round((pMax - pMin) / lineSpacing));
+
+  // Laser is modeled as a flat uniform beam of "kerf" diameter — no V or ball
+  // profile applies.
+  const bitType = isLaser ? 'flat' : bitTypeIn.value;
+  const bitDia  = parseFloat(bitDiamIn.value);
+  const bitR    = bitDia / 2;
+  const tanHalfV = bitType === 'vbit'
+    ? Math.tan(parseFloat(bitAngleIn.value) * Math.PI / 360)
+    : 0;
+  const maxReach = bitType === 'vbit' ? (maxDepth * tanHalfV) : bitR;
+  const checkRadius = Math.ceil(maxReach / lineSpacing) + 1;
+
+  return {
+    widthMm, heightMm, maxDepth, lineSpacing,
+    cosA, sinA, pMin, numLines,
+    bitType, bitR, tanHalfV, checkRadius,
+    skipWhite: skipWhiteIn.checked,
+    isLaser,
+  };
+}
+
+// Returns engraved depth (≤ 0) at workpiece point (xMm, yMm).
+function computeEngravedDepth(xMm, yMm, ctx) {
+  if (!processedData) return 0;
+  const data = processedData.data;
+  const Wp = processedData.width, Hp = processedData.height;
+  const {
+    widthMm, heightMm, maxDepth, lineSpacing,
+    cosA, sinA, pMin, numLines,
+    bitType, bitR, tanHalfV, checkRadius, skipWhite,
+  } = ctx;
+
+  const perpP  = -xMm*sinA + yMm*cosA;
+  const scanTP =  xMm*cosA + yMm*sinA;
+
+  let liNearest = Math.round((perpP - pMin) / lineSpacing - 0.5);
+  if (liNearest < 0) liNearest = 0;
+  else if (liNearest >= numLines) liNearest = numLines - 1;
+
+  let bestDepth = 0;
+  for (let dl = -checkRadius; dl <= checkRadius; dl++) {
+    const li = liNearest + dl;
+    if (li < 0 || li >= numLines) continue;
+    const perpD = pMin + (li + 0.5) * lineSpacing;
+    const dPerp = Math.abs(perpP - perpD);
+
+    const xL = scanTP*cosA - perpD*sinA;
+    const yL = scanTP*sinA + perpD*cosA;
+    if (xL < 0 || xL > widthMm || yL < 0 || yL > heightMm) continue;
+
+    // Bilinear sample of image at the scan line's hit point
+    const fx = (xL / widthMm) * Wp - 0.5;
+    const fy = (yL / heightMm) * Hp - 0.5;
+    let xi = Math.floor(fx), yi = Math.floor(fy);
+    const tx = fx - xi, ty = fy - yi;
+    if (xi < 0) xi = 0; else if (xi > Wp - 2) xi = Wp - 2;
+    if (yi < 0) yi = 0; else if (yi > Hp - 2) yi = Hp - 2;
+    const v00 = data[(yi*Wp + xi)     * 4];
+    const v10 = data[(yi*Wp + xi + 1) * 4];
+    const v01 = data[((yi+1)*Wp + xi)     * 4];
+    const v11 = data[((yi+1)*Wp + xi + 1) * 4];
+    const va = v00 + (v10 - v00) * tx;
+    const vb = v01 + (v11 - v01) * tx;
+    const v  = va + (vb - va) * ty;
+
+    if (skipWhite && v >= 254) continue;
+    const lineH = maxDepth * (1 - v/255); // positive cut depth at centerline
+    if (lineH <= 0) continue;
+
+    let pointDepth = 0;
+    if (bitType === 'flat') {
+      pointDepth = (dPerp < bitR) ? -lineH : 0;
+    } else if (bitType === 'ball') {
+      if (dPerp >= bitR) continue;
+      const sag = bitR - Math.sqrt(bitR*bitR - dPerp*dPerp);
+      const eff = lineH - sag;
+      pointDepth = eff <= 0 ? 0 : -eff;
+    } else { // vbit
+      const reach = lineH * tanHalfV;
+      if (dPerp >= reach) continue;
+      const eff = lineH - dPerp / tanHalfV;
+      pointDepth = eff <= 0 ? 0 : -eff;
+    }
+    if (pointDepth < bestDepth) bestDepth = pointDepth;
+  }
+  return bestDepth;
+}
+
+// Cached depth grid shared between threeView and finalView.
+let _depthGrid = null;
+function invalidateDepthGrid() { _depthGrid = null; }
+function ensureDepthGrid() {
+  if (!processedData) return null;
+  const { cols, rows } = meshResolution();
+  if (_depthGrid && _depthGrid.cols === cols && _depthGrid.rows === rows) return _depthGrid;
+  const ctx = buildSimContext();
+  const { widthMm, heightMm } = ctx;
+  const data = new Float32Array(cols * rows);
+  for (let j = 0; j < rows; j++) {
+    const yMm = (j + 0.5) / rows * heightMm;
+    for (let i = 0; i < cols; i++) {
+      const xMm = (i + 0.5) / cols * widthMm;
+      data[j * cols + i] = computeEngravedDepth(xMm, yMm, ctx);
+    }
+  }
+  _depthGrid = { cols, rows, data, widthMm, heightMm, maxDepth: ctx.maxDepth, isLaser: ctx.isLaser };
+  return _depthGrid;
+}
+
+// ---------- 3D view ----------
+const threeView = (() => {
+  const canvas = $('canvas3d');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setClearColor(0x181818);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
+  camera.position.set(120, 100, 120);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const key = new THREE.DirectionalLight(0xffffff, 0.9);
+  key.position.set(80, 120, 60); scene.add(key);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+  fill.position.set(-60, 40, -80); scene.add(fill);
+
+  const grid = new THREE.GridHelper(300, 30, 0x333333, 0x282828);
+  grid.position.y = -0.01; scene.add(grid);
+  scene.add(new THREE.AxesHelper(30));
+
+  const root = new THREE.Group(); scene.add(root);
+
+  let heightmapMesh = null;
+  let woodBlock = null;
+  let toolpathGroup = null;
+  let visible = false;
+  let framed = false;
+
+  // Default fallback colors; the actual base/engrave colors come from the
+  // selected material (looked up per build).
+  const FALLBACK_BASE = new THREE.Color(0xc89968);
+  const FALLBACK_ENGRAVE = new THREE.Color(0x3a2412);
+
+  function resize() {
+    const pane = $('pane3d');
+    const w = pane.clientWidth, h = pane.clientHeight;
+    if (w === 0 || h === 0) return;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+
+  function disposeMesh(m) {
+    if (!m) return;
+    root.remove(m);
+    m.traverse?.(o => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(mm => mm.dispose());
+    });
+    if (m.geometry) m.geometry.dispose();
+    if (m.material) (Array.isArray(m.material) ? m.material : [m.material]).forEach(mm => mm.dispose());
+  }
+
+  function buildHeightmap() {
+    disposeMesh(heightmapMesh); heightmapMesh = null;
+    disposeMesh(woodBlock); woodBlock = null;
+    if (!processedData) return;
+
+    const grid = ensureDepthGrid();
+    if (!grid) return;
+    const { cols, rows, data: depth, widthMm, heightMm, maxDepth, isLaser } = grid;
+
+    // Material-aware base + engrave colors. For non-wood materials whose
+    // engraving is LIGHTER than the base (acrylic, anodized, slate, mirror,
+    // ...), the engraving multiplier is > 1, so we sRGB-blend in linear
+    // space-ish here.
+    const matDef = currentMaterialDef();
+    const baseCol    = new THREE.Color(matDef.base[0]/255, matDef.base[1]/255, matDef.base[2]/255);
+    const engraveCol = new THREE.Color(matDef.engrave[0], matDef.engrave[1], matDef.engrave[2]);
+
+    const positions = new Float32Array(cols * rows * 3);
+    const colors    = new Float32Array(cols * rows * 3);
+    const indices = [];
+    let vi = 0, ci = 0;
+    for (let j = 0; j < rows; j++) {
+      const yMm = (j + 0.5) / rows * heightMm;
+      const zPos = yMm - heightMm / 2;
+      for (let i = 0; i < cols; i++) {
+        const xMm = (i + 0.5) / cols * widthMm;
+        const z = depth[j * cols + i];
+        positions[vi++] = xMm - widthMm / 2;
+        // Laser doesn't remove material — keep the surface flat and let the
+        // burn shading carry the information.
+        positions[vi++] = isLaser ? 0 : z;
+        positions[vi++] = zPos;
+        const dr = Math.min(1, Math.max(0, -z / Math.max(0.001, maxDepth)));
+        const t = Math.pow(dr, 0.85);
+        // Mix base→engrave (engrave can be lighter or darker than base)
+        colors[ci++] = baseCol.r*(1-t) + engraveCol.r*t;
+        colors[ci++] = baseCol.g*(1-t) + engraveCol.g*t;
+        colors[ci++] = baseCol.b*(1-t) + engraveCol.b*t;
+      }
+    }
+    for (let j = 0; j < rows - 1; j++) {
+      for (let i = 0; i < cols - 1; i++) {
+        const a = j*cols + i, b = j*cols + i+1, c = (j+1)*cols + i, d = (j+1)*cols + i+1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.85, metalness: 0, side: THREE.DoubleSide
+    });
+    heightmapMesh = new THREE.Mesh(geom, mat);
+    heightmapMesh.renderOrder = 1;
+    root.add(heightmapMesh);
+
+    // Wood block underneath the engraved surface for visual context.
+    // CNC: top of block sits below the deepest cut. Laser: top sits just
+    // below the flat surface, since nothing is removed.
+    // The polygonOffset on the block material pushes its depth slightly back
+    // so the heightmap always wins z-fighting where they're near-coplanar
+    // (especially the laser case where everything sits within 0.5 mm of Y=0).
+    const surfaceMinY = isLaser ? 0 : -maxDepth;
+    const blockT = isLaser ? 6 : Math.max(maxDepth * 4, 6);
+    // Block uses the material's natural base color so it visually matches.
+    const blockCol = new THREE.Color(matDef.base[0]/255, matDef.base[1]/255, matDef.base[2]/255)
+      .multiplyScalar(0.85);
+    woodBlock = new THREE.Mesh(
+      new THREE.BoxGeometry(widthMm, blockT, heightMm),
+      new THREE.MeshStandardMaterial({
+        color: blockCol,
+        roughness: matDef.roughness ?? 0.9,
+        metalness: (matDef.metalness ?? 0) * 0.7,
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4,
+      })
+    );
+    woodBlock.position.y = surfaceMinY - blockT/2 - 0.25;
+    woodBlock.visible = $('showWood').checked;
+    root.add(woodBlock);
+
+    // Only frame the camera the first time we get geometry (or after an
+    // explicit reset). Settings changes preserve the user's viewing angle.
+    if (!framed) {
+      const radius = Math.max(widthMm, heightMm) * 0.9;
+      camera.position.set(radius * 0.9, radius * 0.7, radius * 1.1);
+      controls.target.set(0, isLaser ? -0.5 : -maxDepth/2, 0);
+      controls.update();
+      framed = true;
+    }
+  }
+
+  function updateToolpathFromArrays(cutPos, cutCol, rapidPos) {
+    disposeMesh(toolpathGroup); toolpathGroup = null;
+    toolpathGroup = new THREE.Group();
+
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.Float32BufferAttribute(cutPos, 3));
+    cg.setAttribute('color', new THREE.Float32BufferAttribute(cutCol, 3));
+    const cm = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95 });
+    const cuts = new THREE.LineSegments(cg, cm);
+    cuts.name = 'cuts'; cuts.renderOrder = 5;
+    toolpathGroup.add(cuts);
+
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.Float32BufferAttribute(rapidPos, 3));
+    const rm = new THREE.LineDashedMaterial({
+      color: 0xff5a5a, dashSize: 1.5, gapSize: 1.0, transparent: true, opacity: 0.7,
+    });
+    const rapids = new THREE.LineSegments(rg, rm);
+    rapids.computeLineDistances();
+    rapids.name = 'rapids'; rapids.renderOrder = 5;
+    rapids.visible = $('showRapids').checked;
+    toolpathGroup.add(rapids);
+
+    toolpathGroup.visible = $('showToolpath').checked;
+    root.add(toolpathGroup);
+  }
+
+  function tick() {
+    if (visible) {
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  return {
+    onShow() { visible = true; resize(); },
+    updateHeightmap() { buildHeightmap(); },
+    updateToolpathFromArrays,
+    setToolpathVisible(v) { if (toolpathGroup) toolpathGroup.visible = v; },
+    setRapidsVisible(v) {
+      if (!toolpathGroup) return;
+      const r = toolpathGroup.getObjectByName('rapids');
+      if (r) r.visible = v;
+    },
+    setWoodVisible(v) { if (woodBlock) woodBlock.visible = v; },
+    resetView() { framed = false; },
+    setBackground(color) { renderer.setClearColor(color); },
+  };
+})();
+
+$('showToolpath').addEventListener('change', e => threeView.setToolpathVisible(e.target.checked));
+$('showRapids').addEventListener('change',   e => threeView.setRapidsVisible(e.target.checked));
+$('showWood').addEventListener('change',     e => threeView.setWoodVisible(e.target.checked));
+
+// ---------- Final Render view (realistic wood) ----------
+const finalView = (() => {
+  const canvas = $('canvasfinal');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setClearColor(0x1a140d); // warm dark background
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 5000);
+  camera.position.set(140, 110, 140);
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+
+  // Warmer lighting for the realistic render
+  const amb = new THREE.AmbientLight(0xffe7c8, 0.6); scene.add(amb);
+  const key = new THREE.DirectionalLight(0xfff1d8, 1.1);
+  key.position.set(80, 130, 60); scene.add(key);
+  const fill = new THREE.DirectionalLight(0x8aa4ff, 0.25);
+  fill.position.set(-90, 30, -70); scene.add(fill);
+  const rim = new THREE.DirectionalLight(0xffd7a1, 0.4);
+  rim.position.set(0, 40, -120); scene.add(rim);
+
+  const root = new THREE.Group(); scene.add(root);
+
+  let heightmap = null;
+  let block = null;
+  let texture = null;
+  let textureKey = '';
+  let visible = false;
+  let framed = false;
+
+  function getMaterialTexture() {
+    const key = currentMaterialKey();
+    if (texture && textureKey === key) return texture;
+    if (texture) texture.dispose();
+    const c = makeMaterialCanvas(key);
+    texture = new THREE.CanvasTexture(c);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
+    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    texture.needsUpdate = true;
+    textureKey = key;
+    return texture;
+  }
+
+  function resize() {
+    const pane = $('panefinal');
+    const w = pane.clientWidth, h = pane.clientHeight;
+    if (w === 0 || h === 0) return;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  window.addEventListener('resize', resize);
+
+  function disposeMesh(m) {
+    if (!m) return;
+    root.remove(m);
+    if (m.geometry) m.geometry.dispose();
+    if (m.material) (Array.isArray(m.material) ? m.material : [m.material]).forEach(mm => mm.dispose());
+  }
+
+  function build() {
+    disposeMesh(heightmap); heightmap = null;
+    disposeMesh(block); block = null;
+    if (!processedData) return;
+
+    const tex = getMaterialTexture();
+    const grain = currentGrainScale();
+    const matDef = currentMaterialDef();
+    const grid = ensureDepthGrid();
+    if (!grid) return;
+    const { cols, rows, data: depth, widthMm, heightMm, maxDepth, isLaser } = grid;
+
+    const positions = new Float32Array(cols * rows * 3);
+    const uvs       = new Float32Array(cols * rows * 2);
+    const burnArr   = new Float32Array(cols * rows); // per-vertex burn 0..1
+    const indices = [];
+    const BURN_GAMMA = isLaser ? 0.45 : 0.6;
+    let vi = 0, bi = 0, ui = 0;
+    for (let j = 0; j < rows; j++) {
+      const yMm = (j + 0.5) / rows * heightMm;
+      const zPos = yMm - heightMm / 2;
+      for (let i = 0; i < cols; i++) {
+        const xMm = (i + 0.5) / cols * widthMm;
+        const xPos = xMm - widthMm / 2;
+        const z = depth[j * cols + i];
+        positions[vi++] = xPos;
+        positions[vi++] = isLaser ? 0 : z; // laser: flat surface, no depth
+        positions[vi++] = zPos;
+        uvs[ui++] = xMm / grain;
+        uvs[ui++] = yMm / grain;
+        const dr = Math.min(1, Math.max(0, -z / Math.max(0.001, maxDepth)));
+        burnArr[bi++] = Math.pow(dr, BURN_GAMMA);
+      }
+    }
+    for (let j = 0; j < rows - 1; j++) {
+      for (let i = 0; i < cols - 1; i++) {
+        const a = j*cols + i, b = j*cols + i+1, c = (j+1)*cols + i, d = (j+1)*cols + i+1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('uv',       new THREE.BufferAttribute(uvs, 2));
+    geom.setAttribute('burn',     new THREE.BufferAttribute(burnArr, 1));
+    geom.setIndex(indices);
+    geom.computeVertexNormals();
+
+    // Engrave color uniform — material-specific. The shader mixes between the
+    // texture color (burn=0) and the engrave color (burn=1) per fragment. This
+    // works for both *darkening* engravings (wood: dark brown overlay) and
+    // *lightening* ones (acrylic, anodized: white/silver overlay), since the
+    // mix is absolute rather than multiplicative.
+    const engColor = new THREE.Color(matDef.engrave[0], matDef.engrave[1], matDef.engrave[2]);
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: matDef.roughness ?? 0.7,
+      metalness: matDef.metalness ?? 0.0,
+      side: THREE.DoubleSide,
+    });
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uEngrave = { value: engColor };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+attribute float burn;
+varying float vBurn;`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+vBurn = burn;`);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>
+uniform vec3 uEngrave;
+varying float vBurn;`)
+        .replace('#include <map_fragment>', `#include <map_fragment>
+diffuseColor.rgb = mix(diffuseColor.rgb, uEngrave, clamp(vBurn, 0.0, 1.0));`);
+    };
+    heightmap = new THREE.Mesh(geom, mat);
+    root.add(heightmap);
+
+    // Block uses the same material texture for visual continuity.
+    const surfaceMinY = isLaser ? 0 : -maxDepth;
+    const blockT = isLaser ? 6 : Math.max(maxDepth * 4, 6);
+    const blockGeom = new THREE.BoxGeometry(widthMm, blockT, heightMm);
+    const blockMat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: matDef.roughness ?? 0.85,
+      metalness: matDef.metalness ?? 0,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4,
+    });
+    // For the box, scale UVs by the same grain-per-mm factor on top/bottom
+    const uvAttr = blockGeom.getAttribute('uv');
+    const posAttr = blockGeom.getAttribute('position');
+    for (let i = 0; i < uvAttr.count; i++) {
+      // BoxGeometry indices: 0..3 +X, 4..7 -X, 8..11 +Y, 12..15 -Y, 16..19 +Z, 20..23 -Z
+      const face = Math.floor(i / 4);
+      let u, v;
+      const x = posAttr.getX(i), y = posAttr.getY(i), z = posAttr.getZ(i);
+      switch (face) {
+        case 0: case 1: u = z; v = y; break;            // +X, -X
+        case 2: case 3: u = x; v = z; break;            // +Y, -Y (top/bottom)
+        case 4: case 5: u = x; v = y; break;            // +Z, -Z
+      }
+      uvAttr.setXY(i, u / grain, v / grain);
+    }
+    uvAttr.needsUpdate = true;
+    block = new THREE.Mesh(blockGeom, blockMat);
+    block.position.y = surfaceMinY - blockT/2 - 0.25;
+    root.add(block);
+
+    if (!framed) {
+      const radius = Math.max(widthMm, heightMm) * 0.95;
+      camera.position.set(radius * 0.85, radius * 0.65, radius * 1.05);
+      controls.target.set(0, isLaser ? -0.5 : -maxDepth/2, 0);
+      controls.update();
+      framed = true;
+    }
+  }
+
+  function tick() {
+    if (visible) { controls.update(); renderer.render(scene, camera); }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  return {
+    onShow() { visible = true; resize(); build(); },
+    refresh() { build(); },
+    resetView() { framed = false; },
+    setBackground(color) { renderer.setClearColor(color); },
+  };
+})();
+
+// Theme-aware background colors for the two WebGL canvases. Called from the
+// theme toggle so the previews stay readable in both modes.
+function setRendererBackgrounds(isLight) {
+  threeView.setBackground(isLight ? 0xdfe3e8 : 0x181818);
+  finalView.setBackground(isLight ? 0xeae1d4 : 0x1a140d);
+}
+
+// Material / grain-scale changes — both views show material-aware colors
+$('woodType').addEventListener('change', () => {
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+$('grainScale').addEventListener('input', () => {
+  $('grainScaleVal').textContent = $('grainScale').value;
+  finalView.refresh();
+});
+
+// Switching CNC ↔ Laser changes the simulated geometry: surface goes flat for
+// laser, V/ball profile only applies to CNC, etc. Force a depth-grid rebuild
+// and re-render both previews.
+outputModeIn.addEventListener('change', () => {
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+
+// Laser line-spacing input — recalculate grid + previews on every edit.
+laserLineSpacingIn.addEventListener('input', () => {
+  updateLineSpacingInfo();
+  updateBitInfo();
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+updateLineSpacingInfo();
+
+// Initial UI sync
+$('stepoverVal').textContent = stepoverIn.value + '%';
+bitAngleField.style.display = bitTypeIn.value === 'vbit' ? '' : 'none';
+updateBitInfo();
+updatePassInfo();
+
+// ---------- Help tooltips ----------
+const HELP_TEXTS = {
+  imageInput:
+    'Load any image (JPG, PNG, GIF, BMP). The image is converted to grayscale and used as a depth map: darker pixels = deeper cuts.',
+  widthMm:
+    'Physical width of the engraving in mm. With "Keep aspect ratio" on, height follows automatically.',
+  heightMm:
+    'Physical height of the engraving in mm.',
+  scalePct:
+    'Shortcut to scale both dimensions. 100% = 1 mm per source pixel. Always preserves the image\'s native aspect ratio, regardless of the lock checkbox.',
+  dpiInfo:
+    'Effective sampling density at the current size — pixels-per-mm and DPI. Useful for judging detail vs. CNC bit precision.',
+  lockAspect:
+    'When on, editing either Width or Height auto-adjusts the other to keep the image\'s native proportions. Turn off to stretch.',
+  woodType:
+    'Wood species used in the 3D and Final Render previews only. Has no effect on the generated G-code.',
+  grainScale:
+    'How big the wood grain pattern appears, in mm. Larger = wider, more visible grain bands.',
+  bitPreset:
+    'Quick-pick common bit configurations. Selecting a preset fills in type, diameter, and V-angle below.',
+  bitType:
+    'Flat end mill: rectangular grooves. Ball end mill: rounded valleys (best for smooth tonal blending). V-bit: V-shaped grooves whose width depends on depth — great for line art and lettering.',
+  bitDiameter: {
+    cnc:   'Physical bit diameter in mm. For V-bits this controls shank diameter; the cutting width follows depth × tan(angle/2).',
+    laser: 'Effective laser beam width (kerf) in mm at your focal point. Used to draw the burn-stripe width in the 3D preview. Line spacing is set directly below — not derived from this.',
+  },
+  bitAngle:
+    'Included angle of the V-bit cone, in degrees. Smaller angle = sharper V, narrower grooves at a given depth. Common values: 60° and 90°.',
+  stepover:
+    'Spacing between adjacent scan lines as a percentage of the bit\'s effective cutting width. 60% means lines overlap by 40%. Lower = smoother surface but slower; higher = visible ridges, faster.',
+  laserLineSpacing:
+    'Distance between adjacent scan lines in mm. Smaller = finer detail and smoother gradients, but slower. Common values: 0.08–0.20 mm (≈ 320–125 DPI). Laser users typically set this directly rather than as a percentage of beam kerf.',
+  xRes:
+    'Samples per mm along each scan line. Higher resolution captures finer tonal detail in the cutting direction but produces more G-code lines.',
+  levels:
+    'Posterize the grayscale image to N tones (2–256). Lower values give chunkier, more graphic-looking results; full (256) preserves all tonal detail.',
+  sharpness:
+    'Edge-sharpening filter via 3×3 convolution. 0 = off, 100 = strong. Helps line art and detailed photos pop after grayscale conversion.',
+  brightness:
+    'Add a constant to all pixels. Positive = lighter (shallower cuts). Negative = darker (deeper cuts).',
+  contrast:
+    'Spread or compress tonal range around mid-gray. Positive = punchier blacks/whites, negative = flatter.',
+  invert:
+    'Swap black and white. Use this if your source is a white-on-black drawing rather than the typical black-on-white.',
+  maxDepth:
+    'How deep the bit cuts for pure-black pixels, in mm. White pixels cut to Z=0 (surface). Typical wood engraving: 0.5–2 mm.',
+  zSafe:
+    'Safe travel height above the workpiece for rapid (G0) moves. Must clear clamps and any workpiece thickness variation.',
+  maxPerPass:
+    'Maximum depth cut in a single pass. Multiple passes reduce tool load and tearout in deep cuts. Set to 0 to do a single pass straight to the full max depth.',
+  feedRate:
+    'Cutting speed for horizontal G1 moves, in mm/min. Typical wood: 600–1500 mm/min depending on bit, material, and how deep each pass is.',
+  plungeRate:
+    'Speed when the bit moves downward (in Z), in mm/min. Usually slower than feed rate: 150–400 mm/min for wood.',
+  spindle:
+    'Spindle rotation speed (M3 Snnnn). Typical wood engraving: 10000–20000 RPM. Set to 0 if your machine has no spindle control (manual or laser).',
+  cuttingAngle:
+    'Direction of the scan lines on the workpiece. 0° = horizontal, 90° = vertical, 45° = diagonal. Useful to run grooves across the wood grain for cleaner cuts.',
+  skipWhite:
+    'When on, lift the bit to safe height and rapid across continuous white regions instead of dragging at Z=0. Saves significant time on images with large bright areas.',
+  bidirectional:
+    'Zigzag scan pattern: each row alternates direction. Faster than uni-directional. Turn off if your machine has slop that\'s only consistent in one direction.',
+  generateBtn:
+    'Build the G-code and the 3D toolpath visualization from the current image and all settings.',
+  downloadBtn:
+    'Save the generated G-code as engraving.gcode for loading into your CNC controller.',
+  resetSettingsBtn:
+    'Clear all saved settings from this browser and reload the page with the original defaults.',
+  autoLayerBtn:
+    'Set Layer depth to a recommended value based on the current bit: ~50% of flat bit diameter, ~40% of ball bit diameter, 0.3 mm for V-bits.',
+  outputMode:
+    'Switch between CNC mode (Z-axis depth modulation, plunge cuts, spindle) and Laser mode (S-power modulation, no Z motion, M3/M4). G-code output and the relevant settings groups change to match.',
+  maxPower:
+    'S value commanded for the darkest pixels (full intensity). GRBL\'s default range is 0–1000; some controllers use 0–255. Check your machine\'s $30 setting.',
+  minPower:
+    'S value commanded for the lightest pixels. Usually 0 (laser off for pure white). Set slightly above 0 for a faint trace everywhere.',
+  focalZ:
+    'Z height to park the laser head at. Many engravers have a fixed focal distance and ignore Z — set 0 to omit the Z line entirely.',
+  laserMode:
+    'M4 (dynamic): laser scales with feed rate and pauses when the machine isn\'t moving — safer for raster. M3 (constant): full power as soon as enabled, regardless of motion.',
+  laserPasses:
+    'How many times to repeat the full engraving. Use 2–5 passes to deepen / darken marks without changing power.',
+  minFiringS:
+    'Lower bound on emitted S values. Pixels whose computed S would fall below this are skipped entirely (S=0, rapid traverse) — same treatment as white pixels. Use to match your tube/diode\'s firing threshold so faint pixels don\'t get unreliable marginal marks. Typical: 80–150 for CO₂ tubes, 30–80 for diode lasers. Set 0 to disable.',
+  firingPreset:
+    'Quick-pick starting values for the firing threshold. Assumes GRBL\'s default $30=1000 — if your $30 is 255 instead, scale these accordingly. Every laser is slightly different (tube age, focus, lens cleanliness), so test on scrap and tweak the numeric value.',
+  rapidRate:
+    'Speed for non-cutting G0 moves (positioning, retracts). Used only to estimate machining time — the controller decides actual rapid speed. Typical: 2000–6000 mm/min for hobbyist CNC, higher for laser.',
+  dither:
+    'Spreads quantization error across nearby pixels to fake more tonal levels. If Grayscale levels is at "full (256)", dithering falls back to binary (2 levels). Floyd–Steinberg: organic, photo-realistic noise. Atkinson: classic Mac look — punchier, more contrast (only diffuses 6/8 of the error). Ordered Bayer: regular crosshatch, more graphic. All excellent for laser engraving binary materials.',
+  dialect:
+    'Target controller. Mostly cosmetic header comments + a few real differences: Marlin omits G94 (it has no feed-rate mode setting). LinuxCNC ends with M2 instead of M30. Choose Generic if you\'re unsure — most controllers accept that.',
+  compactGcode:
+    'Post-process the G-code to drop trailing decimal zeros and remove inter-token whitespace. Comments stay intact. Typical savings: 15–25% file size. Useful for memory-constrained controllers (older GRBL boards) and slow serial links.',
+  prologue:
+    'Lines inserted right after the automatic G21/G90/G94 setup. Use for: homing ($H), coordinate system selection (G54), spindle warmup, dust collector ON, etc.',
+  epilogue:
+    'Lines inserted right before the final M30/M2. Use for: park position, dust collector OFF, spindle wind-down dwell (G4 P5), etc.',
+  frameEnable:
+    'Trace a rectangle around the engraving area before the main pass. Lets you verify the workpiece is positioned correctly and the engraving fits before committing to a long burn. Highly recommended.',
+  frameMargin:
+    'Distance from the engraving edge to the frame line, in mm. 0 = right at the edge of the engraving; a few mm gives visible whitespace around the engraving.',
+  frameSpeed:
+    'Feed rate for the frame trace. Typically faster than the main feed since this is a quick outline, not detailed work. 1500–3000 mm/min is common.',
+  frameDepth:
+    'How deep to score the frame line, in mm. 0 = dry run at safe Z (machine traces in air — useful for checking clearance). 0.2–0.5 mm = visible scoring line.',
+  framePower:
+    'Laser power for the frame trace. Use a low value (~10–30% of max) for a visible-but-non-burning trace; useful for positioning your workpiece without leaving permanent marks.',
+  framePasses2:
+    'Trace the frame outline twice. Helps with diode lasers where a single fast pass might be too faint to see clearly.',
+};
+
+(function attachHelpIcons() {
+  let tipEl = null;
+  function showTip(target, text) {
+    hideTip();
+    tipEl = document.createElement('div');
+    tipEl.className = 'tooltip';
+    tipEl.textContent = text;
+    document.body.appendChild(tipEl);
+    const r = target.getBoundingClientRect();
+    let left = r.right + 8;
+    let top  = r.top - 4;
+    if (left + tipEl.offsetWidth > window.innerWidth - 8) {
+      left = r.left - 8 - tipEl.offsetWidth;
+    }
+    if (top + tipEl.offsetHeight > window.innerHeight - 8) {
+      top = window.innerHeight - tipEl.offsetHeight - 8;
+    }
+    if (top < 8) top = 8;
+    if (left < 8) left = 8;
+    tipEl.style.left = left + 'px';
+    tipEl.style.top  = top + 'px';
+  }
+  function hideTip() { if (tipEl) { tipEl.remove(); tipEl = null; } }
+
+  for (const [id, tip] of Object.entries(HELP_TEXTS)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    // For buttons or file inputs with no label, attach to the element itself.
+    let target;
+    const field = el.closest('.field, .checkbox-field, .group');
+    let label = field && field.querySelector('label');
+    if (label) {
+      const help = document.createElement('span');
+      help.className = 'help';
+      help.textContent = '?';
+      const val = label.querySelector('.val');
+      if (val) label.insertBefore(help, val);
+      else label.appendChild(help);
+      target = help;
+    } else {
+      // Buttons & file inputs: tag the element with a small help marker
+      // inline next to it. For a button, append a trailing icon.
+      if (el.tagName === 'BUTTON') {
+        const help = document.createElement('span');
+        help.className = 'help';
+        help.textContent = '?';
+        help.style.float = 'right';
+        help.style.marginTop = '2px';
+        el.parentNode.insertBefore(help, el);
+        target = help;
+      } else {
+        // File input — attach to the group-title above it
+        const title = field && field.querySelector('.group-title');
+        if (!title) continue;
+        const help = document.createElement('span');
+        help.className = 'help';
+        help.textContent = '?';
+        title.appendChild(help);
+        target = help;
+      }
+    }
+    // Resolve the tip at hover time so mode-aware tips (e.g. bitDiameter)
+    // show the right text after the user switches CNC ↔ Laser.
+    const resolve = () => {
+      if (typeof tip === 'string') return tip;
+      const mode = (outputModeIn.value === 'laser') ? 'laser' : 'cnc';
+      return tip[mode] || tip.cnc || Object.values(tip)[0];
+    };
+    target.addEventListener('mouseenter', () => showTip(target, resolve()));
+    target.addEventListener('mouseleave', hideTip);
+    // Click-to-stick for touch devices and longer reads
+    target.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (tipEl) hideTip(); else showTip(target, resolve());
+    });
+  }
+  document.addEventListener('click', hideTip);
+  document.addEventListener('scroll', hideTip, true);
+})();
+
+// ---------- Resizable sidebar ----------
+(function setupResize() {
+  const SIDEBAR_KEY = 'gcodefun.sidebarW';
+  const MIN_W = 240, MAX_W_FACTOR = 0.7;
+  const handle = document.getElementById('resizeHandle');
+  // Restore previously saved width
+  try {
+    const saved = parseFloat(localStorage.getItem(SIDEBAR_KEY));
+    if (saved >= MIN_W) {
+      document.documentElement.style.setProperty('--sidebar-w', saved + 'px');
+    }
+  } catch (e) {}
+
+  let dragging = false;
+  handle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    handle.classList.add('dragging');
+    handle.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const maxW = Math.min(window.innerWidth * MAX_W_FACTOR, 800);
+    const w = Math.max(MIN_W, Math.min(maxW, e.clientX));
+    document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+    // Tell the WebGL renderers to resize their canvases
+    window.dispatchEvent(new Event('resize'));
+  });
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    try { handle.releasePointerCapture(e.pointerId); } catch {}
+    try {
+      const w = parseFloat(getComputedStyle(document.documentElement)
+        .getPropertyValue('--sidebar-w'));
+      if (w > 0) localStorage.setItem(SIDEBAR_KEY, String(w));
+    } catch (e) {}
+  }
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+  // Double-click resets to default
+  handle.addEventListener('dblclick', () => {
+    document.documentElement.style.removeProperty('--sidebar-w');
+    try { localStorage.removeItem(SIDEBAR_KEY); } catch {}
+    window.dispatchEvent(new Event('resize'));
+  });
+})();
+
+// ---------- Light / Dark theme toggle ----------
+(function setupTheme() {
+  const KEY = 'gcodefun.theme';
+  const btn   = document.getElementById('themeToggle');
+  const icon  = document.getElementById('themeIcon');
+  const label = document.getElementById('themeLabel');
+
+  function applyTheme(name) {
+    const light = name === 'light';
+    document.body.classList.toggle('theme-light', light);
+    // Button shows what you'll get if you click — opposite of the current
+    // mode. So in dark mode, button shows "☀ Light" to switch to light.
+    icon.textContent  = light ? '🌙' : '☀';
+    label.textContent = light ? 'Dark' : 'Light';
+    // Adjust the 3D / Final Render clear colors so they read well in either
+    // theme. (Three.js scene background is independent of CSS.)
+    if (typeof setRendererBackgrounds === 'function') setRendererBackgrounds(light);
+  }
+  // Honor saved preference, otherwise follow the OS preference.
+  let initial = null;
+  try { initial = localStorage.getItem(KEY); } catch {}
+  if (!initial) {
+    initial = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches)
+      ? 'light' : 'dark';
+  }
+  applyTheme(initial);
+
+  btn.addEventListener('click', () => {
+    const next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+    applyTheme(next);
+    try { localStorage.setItem(KEY, next); } catch {}
+  });
+})();
+
+// Restore persisted settings. Runs last so dispatched input/change events hit
+// every previously wired listener — slider labels, bit info, pass info, the
+// V-bit angle field's show/hide, and the depth-grid invalidator all update.
+loadSettings();
+
+</script>
+
+</body>
+</html>
