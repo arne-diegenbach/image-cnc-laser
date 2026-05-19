@@ -13,4 +13,4 @@ Convert an image to CNC G-code or laser G-code in your browser
  - Live 3D preview
  - Selection of material choice
 
-## To use just download the files and open index.html in your browser, no files are uploaded
+### To use just download the files and open index.html in your browser, no files are uploaded, no server required.
