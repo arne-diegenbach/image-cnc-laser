@@ -158,6 +158,7 @@
     padding: 0 8px;
     align-items: center;
     gap: 4px;
+    flex-wrap: wrap;
   }
   .tab {
     padding: 10px 16px;
@@ -177,6 +178,8 @@
     font-size: 12px;
     color: var(--fg-2);
     padding-right: 12px;
+    flex-wrap: wrap;
+    align-items: center;
   }
   .tab-tools label {
     display: flex;
@@ -631,6 +634,54 @@
       <div class="info" id="bitInfo"></div>
     </div>
 
+    <div class="group cnc-only">
+      <div class="group-title">Roughing / Finishing</div>
+      <div class="checkbox-field">
+        <input type="checkbox" id="roughingEnable">
+        <label for="roughingEnable">Use separate roughing bit first</label>
+      </div>
+      <div id="roughingSettings" style="display:none">
+        <div class="row">
+          <div class="field">
+            <label>Rough bit type</label>
+            <select id="roughBitType">
+              <option value="flat">Flat end mill</option>
+              <option value="ball">Ball end mill</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Diameter (mm)</label>
+            <input type="number" id="roughBitDiameter" value="6" min="0.1" step="0.1">
+          </div>
+        </div>
+        <div class="field">
+          <label>Rough stepover <span class="val" id="roughStepoverVal">75%</span></label>
+          <input type="range" id="roughStepover" min="10" max="95" value="75">
+        </div>
+        <div class="field">
+          <label>Finishing allowance (mm)</label>
+          <input type="number" id="finishAllowance" value="0.2" min="0" step="0.05">
+          <div class="info">Material left for the finishing bit to remove. 0.1–0.3 mm is typical.</div>
+        </div>
+        <div class="field">
+          <label>Tool change handling</label>
+          <select id="toolChangeMode">
+            <option value="pause" selected>Pause mid-program (M0)</option>
+            <option value="twofiles">Generate two separate files</option>
+          </select>
+          <div class="info">M0 is supported by GRBL 1.1+, LinuxCNC, Marlin. Pick "two files" if your controller doesn't honor mid-program pauses, or for absolute safety.</div>
+        </div>
+        <div class="field">
+          <label>3D Preview shows</label>
+          <select id="previewPhase">
+            <option value="finishing" selected>Finishing — final result</option>
+            <option value="roughing">Roughing — surface with allowance</option>
+          </select>
+          <div class="info">Switches the 3D Preview and Final Render between the final engraved surface and the rougher surface you'd see after the roughing pass.</div>
+        </div>
+      </div>
+    </div>
+
     <div class="group">
       <div class="group-title">Image Processing</div>
       <div class="field">
@@ -835,6 +886,7 @@
     <div class="group">
       <div class="info" id="timeEstimate" style="font-size:13px; color:var(--estimate-fg); margin-bottom:8px; min-height:18px;">Estimated time: —</div>
       <button id="generateBtn" disabled>Generate G-code &amp; Toolpath</button>
+      <button id="downloadRoughBtn" class="secondary" disabled style="display:none;">Download roughing.gcode</button>
       <button id="downloadBtn" class="secondary" disabled>Download .gcode</button>
       <div class="progress">
         <div class="progress-bar" id="progressBar"></div>
@@ -862,6 +914,11 @@
         <label><input type="checkbox" id="showToolpath"> Toolpath</label>
         <label><input type="checkbox" id="showRapids"> Rapids</label>
         <label><input type="checkbox" id="showWood" checked> Wood block</label>
+        <button id="simToggle" class="tools-btn" type="button" disabled title="Generate the toolpath first, then click to animate the bit along it">▶ Sim</button>
+        <label>
+          <input type="range" id="simSpeed" min="1" max="500" value="50" style="width:60px; vertical-align:middle;" title="Simulation speed — multiplier of real-time machine feed">
+          <span id="simSpeedVal" style="font-family:monospace; min-width:36px; display:inline-block;">50×</span>
+        </label>
       </div>
       <div class="tools-menu">
         <button class="tools-btn" id="toolsBtn" type="button">Tools <span class="caret">▾</span></button>
@@ -941,6 +998,13 @@ const dialectIn    = $('dialect');
 const compactGcodeIn = $('compactGcode');
 const prologueIn   = $('prologue');
 const epilogueIn   = $('epilogue');
+const roughingEnableIn = $('roughingEnable');
+const roughBitTypeIn    = $('roughBitType');
+const roughBitDiameterIn= $('roughBitDiameter');
+const roughStepoverIn   = $('roughStepover');
+const finishAllowanceIn = $('finishAllowance');
+const toolChangeModeIn  = $('toolChangeMode');
+const previewPhaseIn    = $('previewPhase');
 const frameEnableIn  = $('frameEnable');
 const frameMarginIn  = $('frameMargin');
 const frameSpeedIn   = $('frameSpeed');
@@ -991,6 +1055,7 @@ const laserPassesIn= $('laserPasses');
 const laserLineSpacingIn = $('laserLineSpacing');
 const generateBtn  = $('generateBtn');
 const downloadBtn  = $('downloadBtn');
+const downloadRoughBtn = $('downloadRoughBtn');
 const gcodeOut     = $('gcodeOutput');
 const canvas2d     = $('canvas2d');
 const ctx2d        = canvas2d.getContext('2d');
@@ -1001,7 +1066,8 @@ const gcodeStats   = $('gcodeStats');
 
 let originalImage = null;
 let processedData = null;
-let gcodeBlob = null;     // Blob ready for download
+let gcodeBlob = null;     // Blob ready for download (single file, or finishing file in two-files mode)
+let gcodeBlobRough = null; // Roughing file blob (only set in two-files mode)
 let aspectRatio = 1;
 let processTimer = null;
 let generating = false;
@@ -1077,6 +1143,32 @@ stepoverIn.addEventListener('input', () => {
   $('stepoverVal').textContent = stepoverIn.value + '%';
   updateBitInfo();
   scheduleProcess();
+});
+roughStepoverIn.addEventListener('input', () => {
+  $('roughStepoverVal').textContent = roughStepoverIn.value + '%';
+});
+roughingEnableIn.addEventListener('change', () => {
+  $('roughingSettings').style.display = roughingEnableIn.checked ? '' : 'none';
+  // Disabling roughing snaps the preview phase back to finishing.
+  if (!roughingEnableIn.checked) previewPhaseIn.value = 'finishing';
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+previewPhaseIn.addEventListener('change', () => {
+  invalidateDepthGrid();
+  threeView.updateHeightmap();
+  finalView.refresh();
+});
+// Roughing-bit edits also change the roughing-phase preview surface.
+['roughBitType','roughBitDiameter','roughStepover','finishAllowance'].forEach(id => {
+  $(id).addEventListener('input', () => {
+    if (previewPhaseIn.value === 'roughing' && roughingEnableIn.checked) {
+      invalidateDepthGrid();
+      threeView.updateHeightmap();
+      finalView.refresh();
+    }
+  });
 });
 
 function scanGeometry() {
@@ -1237,6 +1329,23 @@ function updateTimeEstimate() {
     totalMin += (perimeter * loops) / fs;
   }
 
+  // Add roughing pass time when two-bit milling is enabled (CNC only).
+  // Roughing uses a different bit so its line spacing — and thus the number of
+  // scan lines — differs from the finishing pass.
+  if (!isLaser && roughingEnableIn.checked) {
+    const allow = Math.max(0, parseFloat(finishAllowanceIn.value) || 0);
+    const roughDia = parseFloat(roughBitDiameterIn.value) || 6;
+    const roughStep = parseFloat(roughStepoverIn.value) || 75;
+    const roughLs = Math.max(0.05, roughDia * roughStep / 100);
+    const roughLines = Math.max(1, Math.round(g.perpLen / roughLs));
+    const effectiveMax = Math.max(0.001, maxDepth - allow);
+    const roughNumPasses = (!perPass || perPass <= 0) ? 1 : Math.ceil(effectiveMax / perPass);
+    const rCut = cols * cutFrac * ds * roughLines * roughNumPasses;
+    const rPlunge = roughLines * roughNumPasses * avgDepth * effectiveMax;
+    const rRapid = roughLines * roughNumPasses * (zSafe * 2 + g.scanLen * 0.4);
+    totalMin += rCut / feedRate + rPlunge / plungeRate + rRapid / rapidRate;
+  }
+
   el.textContent = `Estimated time: ~${formatJobTime(totalMin)}`;
 }
 // Recompute when anything time-relevant changes
@@ -1245,7 +1354,8 @@ function updateTimeEstimate() {
   'maxDepth','zSafe','maxPerPass','feedRate','plungeRate','rapidRate',
   'cuttingAngle','skipWhite','outputMode','laserPasses','levels','dither','invert',
   'sharpness','brightness','contrast','minFiringS','minPower','maxPower',
-  'frameEnable','frameMargin','frameSpeed','frameDepth','framePower','framePasses2'
+  'frameEnable','frameMargin','frameSpeed','frameDepth','framePower','framePasses2',
+  'roughingEnable','roughBitType','roughBitDiameter','roughStepover','finishAllowance'
 ].forEach(id => {
   const el = $(id);
   if (!el) return;
@@ -1278,6 +1388,8 @@ const PERSISTED_IDS = [
   'dialect', 'compactGcode', 'prologue', 'epilogue',
   // border frame
   'frameEnable', 'frameMargin', 'frameSpeed', 'frameDepth', 'framePower', 'framePasses2',
+  // roughing / finishing (two-bit workflow)
+  'roughingEnable', 'roughBitType', 'roughBitDiameter', 'roughStepover', 'finishAllowance', 'toolChangeMode', 'previewPhase',
 ];
 
 function saveSettings() {
@@ -1934,7 +2046,9 @@ async function generateAll() {
     };
 
     // Outputs
-    const gcodeChunks = [];
+    let gcodeChunks = [];           // reassignable: in two-files mode we swap
+    let gcodeChunksRough = null;    // populated only in two-files mode
+    let roughingEndSegIdx = 0;      // cut-segment index where roughing ends
     const cutSegPos = [];
     const cutSegCol = [];
     const rapidPos  = [];
@@ -1960,6 +2074,52 @@ async function generateAll() {
       ? '; --- custom epilogue ---\n' + epilogueText + '\n; --- end epilogue ---\n'
       : '';
 
+    // CNC header / footer helpers — used inline and for the two-files split.
+    // Both read CURRENT bit inputs at call time, so callers can override the
+    // inputs to produce a roughing-vs-finishing variant of either string.
+    function buildCncHeaderStr(label = '') {
+      const ls = lineSpacingMm();
+      const Hgrid = Math.max(1, Math.round((pMax - pMin) / ls));
+      const passes = [];
+      if (!perPass || perPass <= 0) passes.push(maxDepth);
+      else {
+        for (let d = perPass; d < maxDepth; d += perPass) passes.push(d);
+        passes.push(maxDepth);
+      }
+      const labelStr = label ? ` — ${label}` : '';
+      return (
+        `; G-code generated by CNC Image Engraver${labelStr}\n` +
+        `; Target: ${DIALECT_LABEL[dialect]}\n` +
+        `; Date: ${new Date().toISOString()}\n` +
+        `; Engraving grid: ${W} samples × ${Hgrid} scan lines (source ${Wp} x ${Hp})\n` +
+        `; Workpiece: ${widthMm.toFixed(2)} x ${heightMm.toFixed(2)} mm\n` +
+        `; Bit: ${bitTypeIn.value} dia ${parseFloat(bitDiamIn.value).toFixed(2)} mm` +
+          (bitTypeIn.value === 'vbit' ? ` angle ${parseFloat(bitAngleIn.value).toFixed(0)}°` : '') + '\n' +
+        `; Line spacing: ${ls.toFixed(3)} mm\n` +
+        `; Cutting angle: ${cuttingAngleDeg.toFixed(1)}°\n` +
+        `; Z range: 0 (white) to -${maxDepth.toFixed(3)} (black)\n` +
+        `; Passes: ${passes.length} (depths: ${passes.map(d=>d.toFixed(2)).join(', ')})\n` +
+        '\n' +
+        'G21        ; mm\n' +
+        'G90        ; absolute\n' +
+        (useG94 ? 'G94        ; feed/min\n' : '') +
+        prologueBlock +
+        (spindle > 0 ? `M3 S${spindle}\n` : '') +
+        `G0 Z${zSafe.toFixed(3)}\n` +
+        'G0 X0.000 Y0.000\n\n'
+      );
+    }
+    function buildCncFooterStr() {
+      return (
+        '\n' +
+        `G0 Z${zSafe.toFixed(3)}\n` +
+        'G0 X0.000 Y0.000\n' +
+        (spindle > 0 ? 'M5\n' : '') +
+        epilogueBlock +
+        endCmd + '\n'
+      );
+    }
+
     // Header
     if (isLaser) {
       gcodeChunks.push(
@@ -1983,27 +2143,7 @@ async function generateAll() {
         'G0 X0.000 Y0.000\n\n'
       );
     } else {
-      gcodeChunks.push(
-        '; G-code generated by CNC Image Engraver\n' +
-        `; Target: ${DIALECT_LABEL[dialect]}\n` +
-        `; Date: ${new Date().toISOString()}\n` +
-        `; Engraving grid: ${W} samples × ${H} scan lines (source ${Wp} x ${Hp})\n` +
-        `; Workpiece: ${widthMm.toFixed(2)} x ${heightMm.toFixed(2)} mm\n` +
-        `; Bit: ${bitTypeIn.value} dia ${parseFloat(bitDiamIn.value).toFixed(2)} mm` +
-          (bitTypeIn.value === 'vbit' ? ` angle ${parseFloat(bitAngleIn.value).toFixed(0)}°` : '') + '\n' +
-        `; Line spacing: ${lineSpacing.toFixed(3)} mm\n` +
-        `; Cutting angle: ${cuttingAngleDeg.toFixed(1)}°\n` +
-        `; Z range: 0 (white) to -${maxDepth.toFixed(3)} (black)\n` +
-        `; Passes: ${numPasses} (depths: ${passDepths.map(d=>d.toFixed(2)).join(', ')})\n` +
-        '\n' +
-        'G21        ; mm\n' +
-        'G90        ; absolute\n' +
-        (useG94 ? 'G94        ; feed/min\n' : '') +
-        prologueBlock +
-        (spindle > 0 ? `M3 S${spindle}\n` : '') +
-        `G0 Z${zSafe.toFixed(3)}\n` +
-        'G0 X0.000 Y0.000\n\n'
-      );
+      gcodeChunks.push(buildCncHeaderStr());
     }
 
     let prevEnd = { x: 0, y: 0, z: isLaser ? 0 : zSafe };
@@ -2099,8 +2239,43 @@ async function generateAll() {
       gcodeChunks.push('; ====== End border ======\n\n');
     }
 
-    const totalRows = numPasses * H;
-    let rowsDone = 0;
+    // One pass-set (roughing OR finishing). When two-bit milling is enabled
+    // we call this twice — first with roughing bit values + allowance offset,
+    // then with finishing values + no allowance. Bit values are read from the
+    // bit inputs at call time (caller overrides them for roughing).
+    async function emitPassSet({ allowance = 0, label = '' } = {}) {
+      // Bit-dependent: read fresh on each call (caller may have overridden)
+      const lineSpacing = lineSpacingMm();
+      const H = Math.max(1, Math.round((pMax - pMin) / lineSpacing));
+      const effectiveMax = Math.max(0.001, maxDepth - allowance);
+      const passDepths = [];
+      if (isLaser) {
+        for (let i = 0; i < laserPasses; i++) passDepths.push(effectiveMax);
+      } else if (!perPass || perPass <= 0) {
+        passDepths.push(effectiveMax);
+      } else {
+        for (let d = perPass; d < effectiveMax; d += perPass) passDepths.push(d);
+        passDepths.push(effectiveMax);
+      }
+      const numPasses = passDepths.length;
+      const pixelZ = (v) => {
+        let z = -maxDepth * (1 - v / 255);
+        if (allowance > 0) z = Math.min(0, z + allowance);
+        return z;
+      };
+
+      // Pass-set header comment
+      gcodeChunks.push(
+        `\n; ====== ${label} (${numPasses} pass${numPasses>1?'es':''}) ` +
+        `bit ${bitTypeIn.value} ⌀${parseFloat(bitDiamIn.value).toFixed(2)} mm` +
+        (bitTypeIn.value === 'vbit' ? ` ${parseFloat(bitAngleIn.value).toFixed(0)}°` : '') +
+        `, line spacing ${lineSpacing.toFixed(3)} mm` +
+        (allowance > 0 ? `, allowance ${allowance.toFixed(2)} mm` : '') +
+        ' ======\n'
+      );
+
+      const totalRows = numPasses * H;
+      let rowsDone = 0;
 
     for (let pass = 0; pass < numPasses; pass++) {
       const pd = passDepths[pass];
@@ -2318,6 +2493,65 @@ async function generateAll() {
       }
       if (rowChunks.length) gcodeChunks.push(rowChunks.join(''));
     }
+    } // ----- end emitPassSet -----
+
+    // If two-bit milling is enabled (CNC only), do a roughing pass first with
+    // the roughing bit's geometry, leaving the user-specified allowance for
+    // the finishing pass. Then emit an M0 pause for tool change. Finishing
+    // pass always runs (it's the default single-pass behaviour).
+    if (!isLaser && roughingEnableIn.checked) {
+      const savedType = bitTypeIn.value;
+      const savedDia  = bitDiamIn.value;
+      const savedStep = stepoverIn.value;
+      bitTypeIn.value = roughBitTypeIn.value;
+      bitDiamIn.value = roughBitDiameterIn.value;
+      stepoverIn.value = roughStepoverIn.value;
+      const alloc = Math.max(0, parseFloat(finishAllowanceIn.value) || 0);
+      const twoFiles = toolChangeModeIn.value === 'twofiles';
+
+      // While the bit inputs are still at roughing values, rewrite the file's
+      // top header with a "Roughing file" label and the *roughing* bit info.
+      // (The header pushed at the top of generateAll reflected the finishing
+      // bit; we replace chunks[0] now that we know we're roughing.)
+      gcodeChunks[0] = buildCncHeaderStr(twoFiles ? 'Roughing file' : 'Roughing + Finishing — single file');
+
+      await emitPassSet({ allowance: alloc, label: 'Roughing pass' });
+      // Mark the boundary in the visualization-segment array so the bit-along-
+      // path simulation can swap the bit mesh at this index.
+      roughingEndSegIdx = cutSegPos.length / 6;
+
+      if (twoFiles) {
+        // Two-files mode: end the roughing file with its own footer, save it,
+        // then open a fresh chunks array for the finishing file.
+        gcodeChunks.push(buildCncFooterStr());
+        gcodeChunksRough = gcodeChunks;
+        gcodeChunks = [];
+        // Restore finishing bit BEFORE emitting the finishing file's header.
+        bitTypeIn.value = savedType;
+        bitDiamIn.value = savedDia;
+        stepoverIn.value = savedStep;
+        gcodeChunks.push(buildCncHeaderStr('Finishing file'));
+        // Reset machine pose at the start of the new file.
+        prevEnd.x = 0; prevEnd.y = 0; prevEnd.z = zSafe;
+      } else {
+        // Single-file mode: emit an M0 pause for mid-program tool change.
+        bitTypeIn.value = savedType;
+        bitDiamIn.value = savedDia;
+        stepoverIn.value = savedStep;
+        gcodeChunks.push(
+          '\n; ====== Tool change — install finishing bit ======\n' +
+          (spindle > 0 ? 'M5         ; spindle off\n' : '') +
+          `G0 Z${zSafe.toFixed(3)}\n` +
+          'G0 X0.000 Y0.000\n' +
+          'M0         ; pause until resumed (swap bit, then press cycle start)\n' +
+          (spindle > 0 ? `M3 S${spindle}\n` : '') +
+          '\n'
+        );
+        prevEnd.x = 0; prevEnd.y = 0; prevEnd.z = zSafe;
+      }
+    }
+
+    await emitPassSet({ allowance: 0, label: roughingEnableIn.checked ? 'Finishing pass' : 'Engraving' });
 
     // Footer
     if (isLaser) {
@@ -2334,14 +2568,7 @@ async function generateAll() {
         -widthHalf,            0, -heightHalf
       );
     } else {
-      gcodeChunks.push(
-        '\n' +
-        `G0 Z${zSafe.toFixed(3)}\n` +
-        'G0 X0.000 Y0.000\n' +
-        (spindle > 0 ? 'M5\n' : '') +
-        epilogueBlock +
-        endCmd + '\n'
-      );
+      gcodeChunks.push(buildCncFooterStr());
       rapidPos.push(
         prevEnd.x - widthHalf, prevEnd.z, prevEnd.y - heightHalf,
         prevEnd.x - widthHalf, zSafe,    prevEnd.y - heightHalf,
@@ -2362,10 +2589,20 @@ async function generateAll() {
       for (let i = 0; i < gcodeChunks.length; i++) {
         gcodeChunks[i] = minifyGcodeChunk(gcodeChunks[i]);
       }
+      if (gcodeChunksRough) {
+        for (let i = 0; i < gcodeChunksRough.length; i++) {
+          gcodeChunksRough[i] = minifyGcodeChunk(gcodeChunksRough[i]);
+        }
+      }
       await yieldUI();
     }
 
     gcodeBlob = new Blob(gcodeChunks, { type: 'text/plain' });
+    // Two-files mode: also produce the roughing blob. The download handler
+    // emits both files when this is set.
+    gcodeBlobRough = gcodeChunksRough
+      ? new Blob(gcodeChunksRough, { type: 'text/plain' })
+      : null;
 
     // Build a small preview from the first chunk only — never inject megabytes
     // into a textarea.
@@ -2412,12 +2649,24 @@ async function generateAll() {
 
     setProgress(97, 'Building 3D toolpath...');
     await yieldUI();
-    threeView.updateToolpathFromArrays(cutSegPos, cutSegCol, rapidPos);
+    threeView.updateToolpathFromArrays(cutSegPos, cutSegCol, rapidPos, roughingEndSegIdx);
     $('showToolpath').checked = true;
     threeView.setToolpathVisible(true);
 
     setProgress(100, 'Ready');
     downloadBtn.disabled = false;
+    $('simToggle').disabled = false;
+    if (gcodeBlobRough) {
+      // Two-files mode: separate buttons for each phase.
+      downloadRoughBtn.disabled = false;
+      downloadRoughBtn.style.display = '';
+      downloadBtn.textContent = 'Download finishing.gcode';
+    } else {
+      // Single-file mode.
+      downloadRoughBtn.disabled = true;
+      downloadRoughBtn.style.display = 'none';
+      downloadBtn.textContent = 'Download .gcode';
+    }
   } catch (err) {
     console.error(err);
     setProgress(0, 'Error: ' + err.message);
@@ -2484,18 +2733,29 @@ function depthRGB(t) {
 // ---------- Buttons ----------
 generateBtn.addEventListener('click', generateAll);
 
-downloadBtn.addEventListener('click', () => {
-  if (!gcodeBlob) return;
-  const url = URL.createObjectURL(gcodeBlob);
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'engraving.gcode';
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   // Defer revoke so the download has a chance to start (Firefox/Chrome both
   // need this; immediate revoke can abort the transfer for large files).
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+downloadBtn.addEventListener('click', () => {
+  if (!gcodeBlob) return;
+  // In two-files mode this button is labelled "Download finishing.gcode";
+  // otherwise it's the single-file "Download .gcode".
+  const name = gcodeBlobRough ? 'engraving-finishing.gcode' : 'engraving.gcode';
+  downloadBlob(gcodeBlob, name);
+});
+downloadRoughBtn.addEventListener('click', () => {
+  if (!gcodeBlobRough) return;
+  downloadBlob(gcodeBlobRough, 'engraving-roughing.gcode');
 });
 
 // ---------- Tabs ----------
@@ -2719,6 +2979,64 @@ function makeMdfCanvas(base, size) {
   });
 }
 
+// Build a 3D mesh for a cutting bit at the origin, cutting tip at (0, 0, 0)
+// and shaft extending in +Y. Type: 'flat', 'ball', or 'vbit'.
+function makeBitMesh(type, diaMm, vAngleDeg) {
+  const grp = new THREE.Group();
+  grp.name = 'bit';
+  const matCut = new THREE.MeshStandardMaterial({
+    color: 0xdedede, roughness: 0.22, metalness: 0.92,
+  });
+  const matShaft = new THREE.MeshStandardMaterial({
+    color: 0x9a9a9a, roughness: 0.45, metalness: 0.85,
+  });
+  const r = Math.max(0.05, diaMm / 2);
+  const shaftR = Math.max(r * 1.05, 1.5);
+  const shaftLen = 25;
+  let cutTotal;
+
+  if (type === 'ball') {
+    // Hemisphere + small cylindrical neck
+    const stem = Math.max(2.5, r);
+    const sph = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 24, 12, 0, Math.PI*2, 0, Math.PI/2),
+      matCut
+    );
+    sph.rotation.x = Math.PI;   // flip hemisphere so the round end points down
+    sph.position.y = r;          // ball's tip at world Y=0
+    const neck = new THREE.Mesh(
+      new THREE.CylinderGeometry(r, r, stem, 24), matCut
+    );
+    neck.position.y = r + stem / 2;
+    grp.add(sph); grp.add(neck);
+    cutTotal = r + stem;
+  } else if (type === 'vbit') {
+    const half = (vAngleDeg / 2) * Math.PI / 180;
+    const coneH = r / Math.max(0.01, Math.tan(half));
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(r, coneH, 24), matCut
+    );
+    cone.rotation.x = Math.PI;  // apex (default +Y) becomes the bottom
+    cone.position.y = coneH / 2; // apex at world Y=0
+    grp.add(cone);
+    cutTotal = coneH;
+  } else { // flat
+    cutTotal = Math.max(6, r * 2);
+    const c = new THREE.Mesh(
+      new THREE.CylinderGeometry(r, r, cutTotal, 24), matCut
+    );
+    c.position.y = cutTotal / 2;
+    grp.add(c);
+  }
+
+  const shaft = new THREE.Mesh(
+    new THREE.CylinderGeometry(shaftR, shaftR, shaftLen, 16), matShaft
+  );
+  shaft.position.y = cutTotal + shaftLen / 2;
+  grp.add(shaft);
+  return grp;
+}
+
 function makeMaterialCanvas(key, size = 512) {
   const cached = woodTextureCache.get(`${key}:${size}`);
   if (cached) return cached;
@@ -2771,15 +3089,47 @@ function meshResolution() {
 }
 
 function buildSimContext() {
-  const isLaser  = outputModeIn.value === 'laser';
+  const isLaser = outputModeIn.value === 'laser';
+  // Preview phase: in 'roughing' we render the surface that would exist after
+  // the roughing pass (full depth − finishing allowance, with the *roughing*
+  // bit's profile and line spacing). In 'finishing' we render the final cut.
+  const phase = (previewPhaseIn && previewPhaseIn.value) || 'finishing';
+  const inRoughingPhase = !isLaser && phase === 'roughing' && roughingEnableIn.checked;
+
   const widthMm  = parseFloat(widthMmIn.value);
   const heightMm = parseFloat(heightMmIn.value);
-  // For laser, use a nominal "max intensity" of 1 mm purely as the
-  // normalization for color modulation. The Y axis won't be displaced.
   const maxDepth = isLaser ? 1 : parseFloat(maxDepthIn.value);
+  const allowance = inRoughingPhase ? Math.max(0, parseFloat(finishAllowanceIn.value) || 0) : 0;
+
   const angRad   = (parseFloat(cuttingAngleIn.value) || 0) * Math.PI / 180;
   const cosA = Math.cos(angRad), sinA = Math.sin(angRad);
-  const lineSpacing = lineSpacingMm();
+
+  // Active bit for the preview: roughing inputs in roughing phase, else main bit
+  const bitType = inRoughingPhase
+    ? roughBitTypeIn.value
+    : (isLaser ? 'flat' : bitTypeIn.value);
+  const bitDia = inRoughingPhase
+    ? (parseFloat(roughBitDiameterIn.value) || 1)
+    : parseFloat(bitDiamIn.value);
+  const bitR   = bitDia / 2;
+  const tanHalfV = (!inRoughingPhase && bitType === 'vbit')
+    ? Math.tan(parseFloat(bitAngleIn.value) * Math.PI / 360)
+    : 0;
+  const stepoverPct = inRoughingPhase
+    ? (parseFloat(roughStepoverIn.value) || 75)
+    : (parseFloat(stepoverIn.value) || 60);
+
+  // Line spacing — for non-laser we derive from the active bit's effective
+  // width × stepover (so roughing phase uses the wider rough-bit lines).
+  let lineSpacing;
+  if (isLaser) {
+    lineSpacing = lineSpacingMm();
+  } else {
+    const effW = bitType === 'vbit'
+      ? Math.max(0.05, 2 * maxDepth * tanHalfV)
+      : Math.max(0.05, bitDia);
+    lineSpacing = Math.max(0.05, effW * stepoverPct / 100);
+  }
 
   let pMin = Infinity, pMax = -Infinity;
   for (const [cx, cy] of [[0,0], [widthMm,0], [0,heightMm], [widthMm,heightMm]]) {
@@ -2788,14 +3138,6 @@ function buildSimContext() {
   }
   const numLines = Math.max(1, Math.round((pMax - pMin) / lineSpacing));
 
-  // Laser is modeled as a flat uniform beam of "kerf" diameter — no V or ball
-  // profile applies.
-  const bitType = isLaser ? 'flat' : bitTypeIn.value;
-  const bitDia  = parseFloat(bitDiamIn.value);
-  const bitR    = bitDia / 2;
-  const tanHalfV = bitType === 'vbit'
-    ? Math.tan(parseFloat(bitAngleIn.value) * Math.PI / 360)
-    : 0;
   const maxReach = bitType === 'vbit' ? (maxDepth * tanHalfV) : bitR;
   const checkRadius = Math.ceil(maxReach / lineSpacing) + 1;
 
@@ -2805,6 +3147,8 @@ function buildSimContext() {
     bitType, bitR, tanHalfV, checkRadius,
     skipWhite: skipWhiteIn.checked,
     isLaser,
+    allowance,
+    phase,
   };
 }
 
@@ -2817,6 +3161,7 @@ function computeEngravedDepth(xMm, yMm, ctx) {
     widthMm, heightMm, maxDepth, lineSpacing,
     cosA, sinA, pMin, numLines,
     bitType, bitR, tanHalfV, checkRadius, skipWhite,
+    allowance = 0,
   } = ctx;
 
   const perpP  = -xMm*sinA + yMm*cosA;
@@ -2853,7 +3198,8 @@ function computeEngravedDepth(xMm, yMm, ctx) {
     const v  = va + (vb - va) * ty;
 
     if (skipWhite && v >= 254) continue;
-    const lineH = maxDepth * (1 - v/255); // positive cut depth at centerline
+    let lineH = maxDepth * (1 - v/255); // positive cut depth at centerline
+    if (allowance > 0) lineH = Math.max(0, lineH - allowance);
     if (lineH <= 0) continue;
 
     let pointDepth = 0;
@@ -2926,6 +3272,17 @@ const threeView = (() => {
   let toolpathGroup = null;
   let visible = false;
   let framed = false;
+  // Bit-along-path simulation state
+  let bitGroup = null;          // THREE.Group of the bit mesh
+  let bitKey = '';              // cache key so we only rebuild when needed
+  let simCutCache = null;       // Float-array clone of last cut path
+  let simPlaying = false;
+  let simSegIdx = 0;
+  let simSegT   = 0;
+  let simSpeed  = 50;           // multiplier × feed-rate
+  let simLastMs = 0;
+  let simRoughingEndIdx = 0;    // segment index where roughing pass ends (0 = no roughing)
+  let simInRoughingBit = null;  // current bit-mesh phase (null forces refresh)
 
   // Default fallback colors; the actual base/engrave colors come from the
   // selected material (looked up per build).
@@ -3046,7 +3403,7 @@ const threeView = (() => {
     }
   }
 
-  function updateToolpathFromArrays(cutPos, cutCol, rapidPos) {
+  function updateToolpathFromArrays(cutPos, cutCol, rapidPos, roughingEndSegIdx = 0) {
     disposeMesh(toolpathGroup); toolpathGroup = null;
     toolpathGroup = new THREE.Group();
 
@@ -3071,19 +3428,112 @@ const threeView = (() => {
 
     toolpathGroup.visible = $('showToolpath').checked;
     root.add(toolpathGroup);
+
+    // Cache a copy of the cut path for the bit-along-path simulation.
+    simCutCache = new Float32Array(cutPos);
+    simRoughingEndIdx = roughingEndSegIdx | 0;
+    simSegIdx = 0; simSegT = 0; simPlaying = false; simLastMs = 0;
+    simInRoughingBit = null;       // force a refresh on first frame
+    updateSimButton();
+    refreshBitMesh();
+    if (bitGroup) bitGroup.visible = false;
   }
 
-  function tick() {
+  // Rebuild the bit mesh from current bit inputs (if changed). Called when
+  // toolpath is generated, when the user opens/refreshes the 3D view, and
+  // mid-simulation when crossing the roughing→finishing boundary.
+  function refreshBitMesh(typeOverride, diaOverride, angOverride) {
+    const type = typeOverride ?? bitTypeIn.value;
+    const dia  = diaOverride  ?? (parseFloat(bitDiamIn.value) || 1);
+    const ang  = angOverride  ?? (parseFloat(bitAngleIn.value) || 60);
+    const key  = `${type}:${dia.toFixed(2)}:${type === 'vbit' ? ang.toFixed(0) : '-'}`;
+    if (bitGroup && bitKey === key) return;
+    const wasVisible = bitGroup ? bitGroup.visible : false;
+    if (bitGroup) { root.remove(bitGroup); disposeMesh(bitGroup); }
+    bitGroup = makeBitMesh(type, dia, ang);
+    bitGroup.visible = wasVisible;
+    root.add(bitGroup);
+    bitKey = key;
+  }
+
+  function updateSimButton() {
+    const btn = $('simToggle');
+    if (!btn) return;
+    btn.textContent = simPlaying ? '❚❚ Pause' : '▶ Sim';
+  }
+
+  function simStep(nowMs) {
+    if (!simCutCache || !simCutCache.length) return;
+    const dt = simLastMs ? Math.min(0.1, (nowMs - simLastMs) / 1000) : 0;
+    if (dt <= 0) return;
+    const feedRate = parseFloat(feedRateIn.value) || 800;
+    let advance = (feedRate / 60) * simSpeed * dt;
+
+    // Swap to the right bit when the simulation crosses the roughing →
+    // finishing boundary (and on the first frame after a fresh toolpath).
+    const isRoughSeg = simRoughingEndIdx > 0 && simSegIdx < simRoughingEndIdx;
+    if (isRoughSeg !== simInRoughingBit) {
+      if (isRoughSeg) {
+        refreshBitMesh(
+          roughBitTypeIn.value,
+          parseFloat(roughBitDiameterIn.value) || 1,
+          60  // roughing bits aren't V-bits in this app
+        );
+      } else {
+        refreshBitMesh();
+      }
+      if (bitGroup) bitGroup.visible = true;
+      simInRoughingBit = isRoughSeg;
+    }
+
+    const segCount = simCutCache.length / 6;
+    while (advance > 0 && simSegIdx < segCount) {
+      const off = simSegIdx * 6;
+      const dx = simCutCache[off+3] - simCutCache[off];
+      const dy = simCutCache[off+4] - simCutCache[off+1];
+      const dz = simCutCache[off+5] - simCutCache[off+2];
+      const segLen = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      const remain = Math.max(0, segLen * (1 - simSegT));
+      if (remain > advance) {
+        simSegT += advance / Math.max(0.001, segLen);
+        advance = 0;
+      } else {
+        advance -= remain;
+        simSegIdx++;
+        simSegT = 0;
+      }
+    }
+    if (simSegIdx >= segCount) {
+      simPlaying = false;
+      simSegIdx = 0;
+      simSegT = 0;
+      simLastMs = 0;
+      updateSimButton();
+      return;
+    }
+    const off = simSegIdx * 6;
+    const t = simSegT;
+    const x = simCutCache[off]   + (simCutCache[off+3] - simCutCache[off])   * t;
+    const y = simCutCache[off+1] + (simCutCache[off+4] - simCutCache[off+1]) * t;
+    const z = simCutCache[off+2] + (simCutCache[off+5] - simCutCache[off+2]) * t;
+    if (bitGroup) bitGroup.position.set(x, y, z);
+  }
+
+  function tick(nowMs) {
     if (visible) {
       controls.update();
+      if (simPlaying) simStep(nowMs || performance.now());
+      simLastMs = nowMs || performance.now();
       renderer.render(scene, camera);
+    } else {
+      simLastMs = 0;
     }
     requestAnimationFrame(tick);
   }
   requestAnimationFrame(tick);
 
   return {
-    onShow() { visible = true; resize(); },
+    onShow() { visible = true; resize(); refreshBitMesh(); },
     updateHeightmap() { buildHeightmap(); },
     updateToolpathFromArrays,
     setToolpathVisible(v) { if (toolpathGroup) toolpathGroup.visible = v; },
@@ -3095,12 +3545,69 @@ const threeView = (() => {
     setWoodVisible(v) { if (woodBlock) woodBlock.visible = v; },
     resetView() { framed = false; },
     setBackground(color) { renderer.setClearColor(color); },
+    refreshBit() { refreshBitMesh(); },
+    toggleSim() {
+      if (!simCutCache || !simCutCache.length) return false;
+      // Force a re-evaluation of which bit to show on the next simStep —
+      // useful when the toolpath was generated with roughing enabled.
+      simInRoughingBit = null;
+      // Pick the right bit immediately so the user sees the correct shape on
+      // frame 1 instead of waiting for the first non-zero-dt frame.
+      const startsRough = simRoughingEndIdx > 0 && simSegIdx < simRoughingEndIdx;
+      if (startsRough) {
+        refreshBitMesh(
+          roughBitTypeIn.value,
+          parseFloat(roughBitDiameterIn.value) || 1,
+          60
+        );
+      } else {
+        refreshBitMesh();
+      }
+      simInRoughingBit = startsRough;
+      if (!simPlaying) {
+        if (simSegIdx >= simCutCache.length / 6) { simSegIdx = 0; simSegT = 0; }
+        // Snap the bit to the current sim position so it's visible at the
+        // right spot the moment Play is pressed.
+        const off = simSegIdx * 6;
+        const sx = simCutCache[off]     + (simCutCache[off+3] - simCutCache[off])     * simSegT;
+        const sy = simCutCache[off+1]   + (simCutCache[off+4] - simCutCache[off+1])   * simSegT;
+        const sz = simCutCache[off+2]   + (simCutCache[off+5] - simCutCache[off+2])   * simSegT;
+        bitGroup.position.set(sx, sy, sz);
+        bitGroup.visible = true;
+        simPlaying = true;
+        simLastMs = 0;
+      } else {
+        simPlaying = false;
+      }
+      updateSimButton();
+      return simPlaying;
+    },
+    stopSim() {
+      simPlaying = false;
+      simSegIdx = 0;
+      simSegT = 0;
+      simLastMs = 0;
+      if (bitGroup) bitGroup.visible = false;
+      updateSimButton();
+    },
+    setSimSpeed(v) { simSpeed = Math.max(1, v); },
   };
 })();
 
 $('showToolpath').addEventListener('change', e => threeView.setToolpathVisible(e.target.checked));
 $('showRapids').addEventListener('change',   e => threeView.setRapidsVisible(e.target.checked));
 $('showWood').addEventListener('change',     e => threeView.setWoodVisible(e.target.checked));
+$('simToggle').addEventListener('click', () => threeView.toggleSim());
+$('simSpeed').addEventListener('input', () => {
+  const v = parseFloat($('simSpeed').value) || 50;
+  $('simSpeedVal').textContent = v + '×';
+  threeView.setSimSpeed(v);
+});
+// Rebuild the bit mesh when the (finishing) bit changes
+['bitType', 'bitDiameter', 'bitAngle'].forEach(id => {
+  $(id).addEventListener('input',  () => threeView.refreshBit());
+  $(id).addEventListener('change', () => threeView.refreshBit());
+});
 
 // ---------- Final Render view (realistic wood) ----------
 const finalView = (() => {
@@ -3448,6 +3955,20 @@ const HELP_TEXTS = {
     'Laser power for the frame trace. Use a low value (~10–30% of max) for a visible-but-non-burning trace; useful for positioning your workpiece without leaving permanent marks.',
   framePasses2:
     'Trace the frame outline twice. Helps with diode lasers where a single fast pass might be too faint to see clearly.',
+  roughingEnable:
+    'Two-bit milling: first emit a faster pass with a larger roughing bit, then an M0 pause to swap to the finishing bit, then the precise finishing pass. Much faster for deep cuts on big workpieces than running the whole job with the small bit.',
+  roughBitType:
+    'Roughing bits are usually flat end mills (fast bulk removal). Ball mills work too if you want smoother roughing.',
+  roughBitDiameter:
+    'Larger = faster roughing (covers more area per scan line), but leaves coarser steps for the finishing pass. 4–8 mm is typical for wood roughing.',
+  roughStepover:
+    'Roughing can use a wider stepover than finishing (60–85%) since the surface gets re-cut anyway. Higher = faster but more ridges left for finishing to clean up.',
+  finishAllowance:
+    'Material left on the surface for the finishing pass to remove. Too little and the finishing bit doesn\'t actually re-cut (no improvement); too much and the finishing pass is slow. 0.1–0.3 mm is typical for wood.',
+  toolChangeMode:
+    'How to handle the bit swap between roughing and finishing. "Pause" emits an M0 mid-program — the controller stops, you change the bit and hit Cycle Start. "Two files" produces two complete .gcode files instead, no mid-program pause — load and run them separately (safer if your controller doesn\'t honor M0 cleanly).',
+  previewPhase:
+    'Which surface the 3D Preview and Final Render show. "Finishing" is the final result. "Roughing" is the rougher surface left after the roughing pass — uses the roughing bit\'s profile and subtracts the finishing allowance, so you can verify what the second pass actually has to clean up. The bit animation also swaps mid-path: roughing bit for the rough cuts, finishing bit after.',
 };
 
 (function attachHelpIcons() {

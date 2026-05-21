@@ -16,6 +16,8 @@ Convert an image to CNC G-code or laser G-code in your browser
  - Selection of material choice
  - Generate CNC code
 
+Many thanks to the contributions from Claude and Gemini.
+
 #### To use just download the files and open index.html in your browser, no server required.
 
 ![App Screenshot](Screenshot-image-cnc-laser.png)
